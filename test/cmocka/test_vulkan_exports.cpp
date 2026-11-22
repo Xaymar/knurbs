@@ -103,8 +103,21 @@ static void test_optional_not_exported(void **)
 	assert_true(names.size() > 10);
 	size_t exported = 0;
 	for (auto &name : names) {
-		// Implemented for real (Task 2), so exporting them is correct.
-		if (name == "device_enum_adapters" || name == "gpu_get_driver_version" || name == "gpu_get_renderer") {
+		// Implemented for real (Task 2; NV12/P010 in phase 2), so exporting them is correct.
+		static const char *implemented[] = {"device_enum_adapters",
+						    "gpu_get_driver_version",
+						    "gpu_get_renderer",
+						    "device_nv12_available",
+						    "device_p010_available",
+						    "device_texture_create_nv12",
+						    "device_texture_create_p010",
+						    "device_stagesurface_create_nv12",
+						    "device_stagesurface_create_p010"};
+		bool real = false;
+		for (const char *n : implemented) {
+			real |= name == n;
+		}
+		if (real) {
 			continue;
 		}
 		if (os_dlsym(module, name.c_str())) {

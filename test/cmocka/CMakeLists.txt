@@ -247,6 +247,15 @@ if(ENABLE_VULKAN)
   target_link_libraries(test_vulkan_draw PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
   add_test(test_vulkan_draw test_vulkan_draw)
 
+  # NV12/P010 two-plane textures: plane-view rendering, sampling, copy and staging; skips without a device.
+  add_executable(test_vulkan_nv12 test_vulkan_nv12.cpp)
+  target_include_directories(test_vulkan_nv12 PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan)
+  target_compile_definitions(test_vulkan_nv12 PRIVATE OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan")
+  target_compile_features(test_vulkan_nv12 PRIVATE cxx_std_17)
+  add_dependencies(test_vulkan_nv12 libobs-vulkan)
+  target_link_libraries(test_vulkan_nv12 PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
+  add_test(test_vulkan_nv12 test_vulkan_nv12)
+
   # Depth/stencil buffers and depth-tested drawing; needs a device (skips without one).
   add_executable(test_vulkan_depth test_vulkan_depth.cpp)
   target_include_directories(test_vulkan_depth PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan)
@@ -350,6 +359,7 @@ if(ENABLE_VULKAN)
     test_vulkan_swapchain
     test_vulkan_shader
     test_vulkan_draw
+    test_vulkan_nv12
     test_vulkan_depth
     test_vulkan_effects
     test_vulkan_video_vulkan
