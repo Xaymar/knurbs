@@ -306,6 +306,7 @@ static obs_scene_t *build_scene()
 struct capture {
 	os_event_t *done;
 	enum video_format format;
+	const char *prefix; // image name prefix: "nv12", "p010", or "<format>tex" while the texture encoder runs
 	int frames = 0;
 	std::vector<image> last; // planes of the last frame kept
 	bool frames_differ = false;
@@ -313,27 +314,22 @@ struct capture {
 
 static const int skip_frames = 8, keep_frames = 3; // the first frames may predate the scene
 
-static void on_frame(void *param, struct video_data *frame)
+// The planes of `format` named "<prefix>_y"/"<prefix>_uv" (or "bgra"), without pixels.
+static std::vector<image> planes_of(enum video_format format, const char *prefix)
 {
-	auto c = (capture *)param;
+	if (format == VIDEO_FORMAT_BGRA) {
+		return {{"bgra", W, H, 4}};
+	}
+	const uint32_t bpp = format == VIDEO_FORMAT_P010 ? 2 : 1; // per Y sample
+	return {{std::string(prefix) + "_y", W, H, bpp}, {std::string(prefix) + "_uv", W / 2, H / 2, bpp * 2}};
+}
+
+// Keeps frames skip_frames .. skip_frames + keep_frames - 1 of a stream of planes; signals `done` after the last.
+static void keep_frame(capture *c, std::vector<image> &planes)
+{
 	const int n = c->frames++;
 	if (n < skip_frames || n >= skip_frames + keep_frames) {
 		return;
-	}
-	std::vector<image> planes;
-	if (c->format == VIDEO_FORMAT_BGRA) {
-		planes.push_back({"bgra", W, H, 4});
-	} else {
-		planes.push_back({"nv12_y", W, H, 1});
-		planes.push_back({"nv12_uv", W / 2, H / 2, 2});
-	}
-	for (size_t p = 0; p < planes.size(); ++p) {
-		image &img = planes[p];
-		img.px.resize((size_t)img.w * img.h * img.bpp);
-		for (uint32_t y = 0; y < img.h; ++y) {
-			memcpy(&img.px[(size_t)y * img.w * img.bpp], frame->data[p] + (size_t)y * frame->linesize[p],
-			       (size_t)img.w * img.bpp);
-		}
 	}
 	if (!c->last.empty()) {
 		for (size_t p = 0; p < planes.size(); ++p) {
@@ -344,6 +340,120 @@ static void on_frame(void *param, struct video_data *frame)
 	if (n == skip_frames + keep_frames - 1) {
 		os_event_signal(c->done);
 	}
+}
+
+static void on_frame(void *param, struct video_data *frame)
+{
+	auto c = (capture *)param;
+	if (c->frames >= skip_frames + keep_frames) {
+		return;
+	}
+	std::vector<image> planes = planes_of(c->format, c->prefix);
+	for (size_t p = 0; p < planes.size(); ++p) {
+		image &img = planes[p];
+		img.px.resize((size_t)img.w * img.h * img.bpp);
+		for (uint32_t y = 0; y < img.h; ++y) {
+			memcpy(&img.px[(size_t)y * img.w * img.bpp], frame->data[p] + (size_t)y * frame->linesize[p],
+			       (size_t)img.w * img.bpp);
+		}
+	}
+	keep_frame(c, planes);
+}
+
+/* ---- texture encoder ---- */
+
+// A video encoder with OBS_ENCODER_CAP_PASS_TEXTURE, so libobs renders the output into NV12/P010 textures
+// (gs_texture_create_nv12/_p010), copies each into an encoder frame (gs_copy_texture in queue_frame: the Y texture
+// only on Windows, which must copy both planes, as D3D11) and, with a raw callback active too, stages the output
+// through gs_stagesurface_create_nv12/_p010 (Windows) or plane by plane (elsewhere). The encoder reads every frame
+// it gets back through an NV12/P010 stage surface staged from the Y texture: both planes. It produces no packets.
+static capture *tex_capture; // the encoder's frames, while the output runs
+
+static bool tex_encode(void *data, struct encoder_texture *tex, int64_t, uint64_t lock_key, uint64_t *next_key,
+		       struct encoder_packet *, bool *received)
+{
+	auto c = (capture *)data;
+	*received = false;
+	if (c->frames >= skip_frames + keep_frames) {
+		return true;
+	}
+	const bool p010 = c->format == VIDEO_FORMAT_P010;
+	std::vector<image> planes = planes_of(c->format, c->prefix);
+	obs_enter_graphics();
+	// D3D11 creates the frames with a keyed mutex (GS_SHARED_KM_TEX); Vulkan has none (both calls return -1).
+	gs_texture_acquire_sync(tex->tex[0], lock_key, GS_WAIT_INFINITE);
+	gs_stagesurf_t *s = p010 ? gs_stagesurface_create_p010(W, H) : gs_stagesurface_create_nv12(W, H);
+	bool ok = s != nullptr;
+	if (ok) {
+		gs_stage_texture(s, tex->tex[0]);
+	}
+	gs_texture_release_sync(tex->tex[0], *next_key);
+	uint8_t *data_ptr;
+	uint32_t linesize;
+	ok = ok && gs_stagesurface_map(s, &data_ptr, &linesize);
+	if (ok) {
+		const uint8_t *src = data_ptr;
+		for (image &img : planes) { // the UV rows follow the Y rows at the same linesize
+			img.px.resize((size_t)img.w * img.h * img.bpp);
+			for (uint32_t y = 0; y < img.h; ++y, src += linesize) {
+				memcpy(&img.px[(size_t)y * img.w * img.bpp], src, (size_t)img.w * img.bpp);
+			}
+		}
+		gs_stagesurface_unmap(s);
+	}
+	gs_stagesurface_destroy(s);
+	obs_leave_graphics();
+	if (ok) {
+		keep_frame(c, planes);
+	}
+	return ok;
+}
+
+static void register_texture_encoder()
+{
+	obs_encoder_info e = {};
+	e.id = "test_texture_encoder";
+	e.type = OBS_ENCODER_VIDEO;
+	e.codec = "h264";
+	e.get_name = [](void *) {
+		return "test texture encoder";
+	};
+	e.create = [](obs_data_t *, obs_encoder_t *) -> void * {
+		return tex_capture;
+	};
+	e.destroy = [](void *) {
+	};
+	e.encode = [](void *, struct encoder_frame *, struct encoder_packet *, bool *received) {
+		*received = false;
+		return false; // libobs must hand this encoder textures, never raw frames
+	};
+	e.encode_texture2 = tex_encode;
+	e.caps = OBS_ENCODER_CAP_PASS_TEXTURE;
+	obs_register_encoder(&e);
+
+	obs_output_info o = {};
+	o.id = "test_texture_output";
+	o.flags = OBS_OUTPUT_VIDEO | OBS_OUTPUT_ENCODED;
+	o.encoded_video_codecs = "h264";
+	o.get_name = [](void *) {
+		return "test texture output";
+	};
+	o.create = [](obs_data_t *, obs_output_t *output) -> void * {
+		return output;
+	};
+	o.destroy = [](void *) {
+	};
+	o.start = [](void *data) {
+		auto out = (obs_output_t *)data;
+		return obs_output_can_begin_data_capture(out, 0) && obs_output_initialize_encoders(out, 0) &&
+		       obs_output_begin_data_capture(out, 0);
+	};
+	o.stop = [](void *data, uint64_t) {
+		obs_output_end_data_capture((obs_output_t *)data);
+	};
+	o.encoded_packet = [](void *, struct encoder_packet *) {
+	};
+	obs_register_output(&o);
 }
 
 static int reset_video(const char *module, enum video_format format)
@@ -359,40 +469,122 @@ static int reset_video(const char *module, enum video_format format)
 	ovi.colorspace = VIDEO_CS_709;
 	ovi.range = VIDEO_RANGE_PARTIAL;
 	ovi.scale_type = OBS_SCALE_BICUBIC;
+	// OBS_TEST_ADAPTER: adapter index for the module under test (for Vulkan, VK_LOADER_DRIVERS_SELECT also works).
+	const char *adapter = getenv("OBS_TEST_ADAPTER");
+	ovi.adapter = adapter ? (uint32_t)atoi(adapter) : 0;
 	return obs_reset_video(&ovi);
 }
 
-static std::vector<image> capture_frames(enum video_format format)
+static std::vector<image> wait_capture(capture &c)
+{
+	const int r = os_event_timedwait(c.done, 20000);
+	if (r != 0) {
+		fail_msg("%s: timed out after %d frames", c.prefix, c.frames);
+	}
+	if (c.frames_differ) {
+		fail_msg("%s: a static scene, but the kept frames differ", c.prefix);
+	}
+	return c.last;
+}
+
+static std::vector<image> capture_frames(enum video_format format, const char *prefix)
 {
 	capture c;
 	c.format = format;
+	c.prefix = prefix;
 	assert_int_equal(os_event_init(&c.done, OS_EVENT_TYPE_MANUAL), 0);
 	obs_add_raw_video_callback(nullptr, on_frame, &c);
 	const int r = os_event_timedwait(c.done, 20000);
 	obs_remove_raw_video_callback(on_frame, &c);
 	os_event_destroy(c.done);
 	if (r != 0) {
-		fail_msg("timed out after %d frames", c.frames);
+		fail_msg("%s: timed out after %d frames", prefix, c.frames);
 	}
 	assert_false(c.frames_differ); // a static scene: every kept frame is the same
 	return c.last;
+}
+
+// Raw frames ("<format>tex_*") and the texture encoder's frames ("<format>enc_*") while the texture encoder runs.
+static std::vector<image> capture_with_encoder(enum video_format format)
+{
+	const bool p010 = format == VIDEO_FORMAT_P010;
+	obs_enter_graphics();
+	const bool available = p010 ? gs_p010_available() : gs_nv12_available();
+	obs_leave_graphics();
+	if (!available) {
+		fail_msg("%s textures unavailable: libobs would not use them", p010 ? "P010" : "NV12");
+	}
+	capture raw, enc;
+	raw.format = enc.format = format;
+	raw.prefix = p010 ? "p010tex" : "nv12tex";
+	enc.prefix = p010 ? "p010enc" : "nv12enc";
+	assert_int_equal(os_event_init(&raw.done, OS_EVENT_TYPE_MANUAL), 0);
+	assert_int_equal(os_event_init(&enc.done, OS_EVENT_TYPE_MANUAL), 0);
+
+	tex_capture = &enc;
+	obs_encoder_t *encoder = obs_video_encoder_create("test_texture_encoder", "texture encoder", nullptr, nullptr);
+	assert_non_null(encoder);
+	obs_encoder_set_video(encoder, obs_get_video());
+	obs_output_t *output = obs_output_create("test_texture_output", "texture output", nullptr, nullptr);
+	assert_non_null(output);
+	obs_output_set_video_encoder(output, encoder);
+	obs_add_raw_video_callback(nullptr, on_frame, &raw);
+	assert_true(obs_output_start(output));
+
+	std::vector<image> images = wait_capture(raw);
+	std::vector<image> encoded = wait_capture(enc);
+	images.insert(images.end(), encoded.begin(), encoded.end());
+
+	obs_remove_raw_video_callback(on_frame, &raw);
+	obs_output_stop(output);
+	for (int i = 0; i < 500 && (obs_output_active(output) || obs_video_active()); ++i) {
+		os_sleep_ms(10);
+	}
+	assert_false(obs_video_active());
+	obs_output_release(output);
+	obs_encoder_release(encoder);
+	tex_capture = nullptr;
+	os_event_destroy(raw.done);
+	os_event_destroy(enc.done);
+	return images;
 }
 
 /* ---- analytic checks ---- */
 
 static int analytic_failures = 0;
 
-static void expect(image &img, uint32_t x, uint32_t y, std::vector<int> want, int tol)
+// P010 images hold 16-bit words with the 10-bit value in the high bits; everything else is bytes.
+static bool ten_bit(const image &img)
+{
+	return img.name.compare(0, 4, "p010") == 0;
+}
+
+static uint32_t components(const image &img)
+{
+	return ten_bit(img) ? img.bpp / 2 : img.bpp;
+}
+
+static int component(image &img, uint32_t x, uint32_t y, uint32_t c)
 {
 	const uint8_t *p = img.at(x, y);
+	if (!ten_bit(img)) {
+		return p[c];
+	}
+	uint16_t v;
+	memcpy(&v, p + c * 2, 2);
+	return v >> 6;
+}
+
+static void expect(image &img, uint32_t x, uint32_t y, std::vector<int> want, int tol)
+{
 	bool ok = true;
-	for (uint32_t c = 0; c < img.bpp; ++c) {
-		ok &= abs((int)p[c] - want[c]) <= tol;
+	for (uint32_t c = 0; c < components(img); ++c) {
+		ok &= abs(component(img, x, y, c) - want[c]) <= tol;
 	}
 	if (!ok) {
 		std::string got, exp;
-		for (uint32_t c = 0; c < img.bpp; ++c) {
-			got += std::to_string(p[c]) + " ";
+		for (uint32_t c = 0; c < components(img); ++c) {
+			got += std::to_string(component(img, x, y, c)) + " ";
 			exp += std::to_string(want[c]) + " ";
 		}
 		print_message("ANALYTIC FAIL %s (%u,%u): got %s want %s(tol %d)\n", img.name.c_str(), x, y, got.c_str(),
@@ -438,25 +630,29 @@ static void check_bgra(image &img)
 	expect(img, 216 + 8, 8 + 24, {255, 255, 255, 255}, 0); // white below it
 }
 
-// BT.709 limited range from non-linear RGB.
-static int luma(float r, float g, float b)
+// BT.709 limited range from non-linear RGB; `scale` 1 for 8 bits, 4 for 10 bits (64 + 876 Y').
+static int luma(float r, float g, float b, float scale = 1.0f)
 {
-	return (int)lroundf(16.0f + 219.0f * (0.2126f * r + 0.7152f * g + 0.0722f * b));
+	return (int)lroundf(scale * (16.0f + 219.0f * (0.2126f * r + 0.7152f * g + 0.0722f * b)));
 }
 
 // BT.709 limited range Cb, Cr (as libobs/media-io/video-matrices.c builds the canvas matrix from Kr 0.2126,
 // Kb 0.0722 for VIDEO_CS_709 / VIDEO_RANGE_PARTIAL): 128 + 224 (B' - Y') / (2 (1 - Kb)), 128 + 224 (R' - Y') /
-// (2 (1 - Kr)).
-static std::vector<int> chroma(float r, float g, float b)
+// (2 (1 - Kr)), times `scale`.
+static std::vector<int> chroma(float r, float g, float b, float scale = 1.0f)
 {
 	const float y = 0.2126f * r + 0.7152f * g + 0.0722f * b;
-	return {(int)lroundf(128.0f + 224.0f * (b - y) / 1.8556f), (int)lroundf(128.0f + 224.0f * (r - y) / 1.5748f)};
+	return {(int)lroundf(scale * (128.0f + 224.0f * (b - y) / 1.8556f)),
+		(int)lroundf(scale * (128.0f + 224.0f * (r - y) / 1.5748f))};
 }
 
 // Luma at four flat points; chroma at the sample covering each (x / 2, y / 2): every luma texel that chroma
-// sample averages over has the same colour there.
+// sample averages over has the same colour there. NV12 or P010 (10 bits, one 8-bit step of tolerance).
 static void check_nv12(image &y, image &uv)
 {
+	const bool ten = ten_bit(y);
+	const float scale = ten ? 4.0f : 1.0f;
+	const int tol = ten ? 4 : 1;
 	const struct {
 		uint32_t x, y;
 		float r, g, b;
@@ -465,8 +661,8 @@ static void check_nv12(image &y, image &uv)
 		      {136, 24, 100 / 255.0f, 150 / 255.0f, 200 / 255.0f},
 		      {128 + 8 + 16, 72 + 8 + 16, 1, 1, 1}};
 	for (const auto &p : points) {
-		expect(y, p.x, p.y, {luma(p.r, p.g, p.b)}, 1);
-		expect(uv, p.x / 2, p.y / 2, chroma(p.r, p.g, p.b), 1);
+		expect(y, p.x, p.y, {luma(p.r, p.g, p.b, scale)}, tol);
+		expect(uv, p.x / 2, p.y / 2, chroma(p.r, p.g, p.b, scale), tol);
 	}
 }
 
@@ -682,15 +878,14 @@ static int run_load(const char *module, const char *kind, int seconds)
 	obs_remove_raw_video_callback(on_load_frame, &stats);
 
 	video_t *video = obs_get_video();
-	printf("load %s: %ld frames received in %d s, rendered %u, lagged %u, output skipped %u\n", kind,
-	       stats.frames, seconds, obs_get_total_frames(), obs_get_lagged_frames(),
-	       video_output_get_skipped_frames(video));
+	printf("load %s: %ld frames received in %d s, rendered %u, lagged %u, output skipped %u\n", kind, stats.frames,
+	       seconds, obs_get_total_frames(), obs_get_lagged_frames(), video_output_get_skipped_frames(video));
 #ifdef _WIN32
 	FILETIME c, e, k, u;
 	GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u);
 	printf("load cpu %.1f s\n", ((((ULONGLONG)k.dwHighDateTime << 32) | k.dwLowDateTime) +
-				    (((ULONGLONG)u.dwHighDateTime << 32) | u.dwLowDateTime)) /
-					   1e7);
+				     (((ULONGLONG)u.dwHighDateTime << 32) | u.dwLowDateTime)) /
+					    1e7);
 #endif
 	obs_set_output_source(0, nullptr);
 	obs_source_remove(obs_scene_get_source(scene));
@@ -739,6 +934,7 @@ static void test_render(void **)
 #pragma GCC diagnostic pop
 #endif
 	register_sources();
+	register_texture_encoder();
 
 	int r = reset_video(arg_a, VIDEO_FORMAT_BGRA);
 	if (vulkan &&
@@ -757,15 +953,31 @@ static void test_render(void **)
 	obs_scene_t *scene = build_scene();
 	obs_set_output_source(0, obs_scene_get_source(scene));
 
-	std::vector<image> images = capture_frames(VIDEO_FORMAT_BGRA);
+	std::vector<image> images = capture_frames(VIDEO_FORMAT_BGRA, "bgra");
 	check_bgra(images[0]);
 
 	assert_int_equal(reset_video(arg_a, VIDEO_FORMAT_NV12), OBS_VIDEO_SUCCESS);
-	std::vector<image> nv12 = capture_frames(VIDEO_FORMAT_NV12);
+	std::vector<image> nv12 = capture_frames(VIDEO_FORMAT_NV12, "nv12");
 	check_nv12(nv12[0], nv12[1]);
 	images.insert(images.end(), nv12.begin(), nv12.end());
 
 	images.push_back(fade_transition());
+
+	// The same output through NV12 encoder textures: raw frames, then what the texture encoder received.
+	std::vector<image> tex = capture_with_encoder(VIDEO_FORMAT_NV12);
+	check_nv12(tex[0], tex[1]);
+	check_nv12(tex[2], tex[3]);
+	images.insert(images.end(), tex.begin(), tex.end());
+
+	// P010: raw (separate R16/RG16 textures), then through P010 encoder textures.
+	assert_int_equal(reset_video(arg_a, VIDEO_FORMAT_P010), OBS_VIDEO_SUCCESS);
+	std::vector<image> p010 = capture_frames(VIDEO_FORMAT_P010, "p010");
+	check_nv12(p010[0], p010[1]);
+	images.insert(images.end(), p010.begin(), p010.end());
+	tex = capture_with_encoder(VIDEO_FORMAT_P010);
+	check_nv12(tex[0], tex[1]);
+	check_nv12(tex[2], tex[3]);
+	images.insert(images.end(), tex.begin(), tex.end());
 
 	obs_set_output_source(0, nullptr);
 	// The main canvas holds the scene: remove it (as the frontend does) so it and its sources go before shutdown.
@@ -798,29 +1010,33 @@ static void test_compare(void **)
 	if (!read_images(arg_a, a) || !read_images(arg_b, b)) {
 		fail_msg("missing or unreadable output (%s or %s): a render did not complete", arg_a, arg_b);
 	}
-	const char *names[] = {"bgra", "nv12_y", "nv12_uv", "fade"};
-	assert_int_equal(a.size(), 4);
-	assert_int_equal(b.size(), 4);
+	const char *names[] = {"bgra",       "nv12_y",     "nv12_uv",    "fade",      "nv12tex_y",
+			       "nv12tex_uv", "nv12enc_y",  "nv12enc_uv", "p010_y",    "p010_uv",
+			       "p010tex_y",  "p010tex_uv", "p010enc_y",  "p010enc_uv"};
+	const size_t count = sizeof(names) / sizeof(names[0]);
+	assert_int_equal(a.size(), count);
+	assert_int_equal(b.size(), count);
 	int failures = 0;
 	for (size_t i = 0; i < a.size(); ++i) {
 		assert_string_equal(a[i].name.c_str(), names[i]);
 		assert_string_equal(b[i].name.c_str(), names[i]);
 		assert_true(a[i].w && a[i].h && a[i].bpp);
 		assert_true(a[i].w == b[i].w && a[i].h == b[i].h && a[i].bpp == b[i].bpp);
-		std::vector<int> max(a[i].bpp, 0);
+		// 10-bit values: the same tolerance as two 8-bit steps.
+		const int tol = ten_bit(a[i]) ? 8 : 2;
+		std::vector<int> max(components(a[i]), 0);
 		size_t over = 0;
 		uint32_t wx = 0, wy = 0;
 		int worst = -1;
 		for (uint32_t y = 0; y < a[i].h; ++y) {
 			for (uint32_t x = 0; x < a[i].w; ++x) {
-				const uint8_t *pa = a[i].at(x, y), *pb = b[i].at(x, y);
 				int px_max = 0;
-				for (uint32_t c = 0; c < a[i].bpp; ++c) {
-					const int d = abs((int)pa[c] - (int)pb[c]);
+				for (uint32_t c = 0; c < components(a[i]); ++c) {
+					const int d = abs(component(a[i], x, y, c) - component(b[i], x, y, c));
 					max[c] = std::max(max[c], d);
 					px_max = std::max(px_max, d);
 				}
-				over += px_max > 2;
+				over += px_max > tol;
 				if (px_max > worst) {
 					worst = px_max, wx = x, wy = y;
 				}
@@ -830,8 +1046,8 @@ static void test_compare(void **)
 		for (int m : max) {
 			per += std::to_string(m) + " ";
 		}
-		print_message("%-8s %3ux%-3u max diff per channel: %s(worst at %u,%u), %zu pixels over 2\n",
-			      a[i].name.c_str(), a[i].w, a[i].h, per.c_str(), wx, wy, over);
+		print_message("%-10s %3ux%-3u max diff per channel: %s(worst at %u,%u), %zu pixels over %d\n",
+			      a[i].name.c_str(), a[i].w, a[i].h, per.c_str(), wx, wy, over, tol);
 		failures += over > 0;
 	}
 	assert_int_equal(failures, 0);
@@ -844,7 +1060,9 @@ int main(int argc, char **argv)
 	}
 	const bool render_mode = argc == 5 && !strcmp(argv[1], "render");
 	if (!render_mode && !(argc == 4 && !strcmp(argv[1], "compare"))) {
-		fprintf(stderr, "usage: %s render <module> vulkan|d3d11 <out> | compare <a> <b> | load <module> <kind> <s>\n", argv[0]);
+		fprintf(stderr,
+			"usage: %s render <module> vulkan|d3d11 <out> | compare <a> <b> | load <module> <kind> <s>\n",
+			argv[0]);
 		return 2;
 	}
 	arg_mode = argv[1], arg_a = argv[2];
