@@ -588,24 +588,39 @@ obs_data_t *obs_encoder_get_defaults(const obs_encoder_t *encoder)
 	return get_defaults(&encoder->info);
 }
 
+obs_properties_t *obs_encoder_add_patent_notice(obs_properties_t *props)
+{
+	if (!props)
+		props = obs_properties_create();
+
+	obs_property_t *p = obs_properties_add_text(props, OBS_ENCODER_PATENT_NOTICE, OBS_ENCODER_PATENT_NOTICE_TEXT,
+						    OBS_TEXT_INFO);
+	if (p) {
+		obs_property_text_set_info_type(p, OBS_TEXT_INFO_WARNING);
+		obs_properties_move_to_front(props, OBS_ENCODER_PATENT_NOTICE);
+	}
+	return props;
+}
+
 obs_properties_t *obs_get_encoder_properties(const char *id)
 {
 	const struct obs_encoder_info *ei = find_encoder_resolved(id, NULL, NULL);
-	if (ei && (ei->get_properties || ei->get_properties2)) {
+	if (!ei)
+		return NULL;
+
+	obs_properties_t *properties = NULL;
+	if (ei->get_properties2) {
+		properties = ei->get_properties2(NULL, ei->type_data);
+	} else if (ei->get_properties) {
+		properties = ei->get_properties(NULL);
+	}
+
+	if (properties) {
 		obs_data_t *defaults = get_defaults(ei);
-		obs_properties_t *properties = NULL;
-
-		if (ei->get_properties2) {
-			properties = ei->get_properties2(NULL, ei->type_data);
-		} else if (ei->get_properties) {
-			properties = ei->get_properties(NULL);
-		}
-
 		obs_properties_apply_settings(properties, defaults);
 		obs_data_release(defaults);
-		return properties;
 	}
-	return NULL;
+	return obs_encoder_add_patent_notice(properties);
 }
 
 obs_properties_t *obs_encoder_properties(const obs_encoder_t *encoder)
@@ -613,20 +628,16 @@ obs_properties_t *obs_encoder_properties(const obs_encoder_t *encoder)
 	if (!obs_encoder_valid(encoder, "obs_encoder_properties"))
 		return NULL;
 
+	obs_properties_t *props = NULL;
 	if (encoder->orig_info.get_properties2) {
-		obs_properties_t *props;
 		props = encoder->orig_info.get_properties2(encoder->context.data, encoder->orig_info.type_data);
-		obs_properties_apply_settings(props, encoder->context.settings);
-		return props;
-
 	} else if (encoder->orig_info.get_properties) {
-		obs_properties_t *props;
 		props = encoder->orig_info.get_properties(encoder->context.data);
-		obs_properties_apply_settings(props, encoder->context.settings);
-		return props;
 	}
 
-	return NULL;
+	if (props)
+		obs_properties_apply_settings(props, encoder->context.settings);
+	return obs_encoder_add_patent_notice(props);
 }
 
 static void encoder_group_new_reconfigure_request(struct obs_encoder_group *group);

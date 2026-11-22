@@ -525,6 +525,16 @@ General Encoder Functions
    type.  Properties are optionally used (if desired) to automatically
    generate user interface widgets to allow users to update settings.
 
+   The list always starts with the patent notice, an
+   :c:enumerator:`OBS_TEXT_INFO` text property of type
+   :c:enumerator:`OBS_TEXT_INFO_WARNING` named
+   ``OBS_ENCODER_PATENT_NOTICE`` (``"knurbs.patent-notice"``), whose text is
+   ``OBS_ENCODER_PATENT_NOTICE_TEXT``: Knurbs grants no licenses or
+   sublicenses to patents.  It is added even when the encoder has no
+   properties of its own, so these functions only return *NULL* for an
+   invalid encoder or an unknown ID.  Frontends may replace the text with a
+   translation, found by the property's name.
+
    :return: The properties list for a specific existing encoder.  Free
             with :c:func:`obs_properties_destroy()`
 

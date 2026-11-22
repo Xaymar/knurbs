@@ -335,6 +335,29 @@ obs_property_t *obs_properties_get(obs_properties_t *props, const char *name)
 	return NULL;
 }
 
+void obs_properties_move_to_front(obs_properties_t *props, const char *name)
+{
+	struct obs_property *first, *p, *tmp, *rest;
+
+	if (!props || !name)
+		return;
+
+	HASH_FIND_STR(props->properties, name, first);
+	if (!first || first == props->properties)
+		return;
+
+	/* uthash keeps insertion order, so re-add everything after it */
+	HASH_DELETE(hh, props->properties, first);
+	rest = props->properties;
+	props->properties = NULL;
+
+	HASH_ADD_STR(props->properties, name, first);
+	HASH_ITER (hh, rest, p, tmp) {
+		HASH_DELETE(hh, rest, p);
+		HASH_ADD_STR(props->properties, name, p);
+	}
+}
+
 obs_properties_t *obs_properties_get_parent(obs_properties_t *props)
 {
 	return (props && props->parent) ? props->parent->parent : NULL;

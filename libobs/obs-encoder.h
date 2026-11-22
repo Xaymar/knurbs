@@ -40,6 +40,15 @@ typedef struct obs_encoder obs_encoder_t;
 #define OBS_ENCODER_CAP_SCALING (1 << 5)
 #define OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE (1 << 6)
 
+/* Every encoder's properties start with this notice, added by
+ * obs_encoder_properties and obs_get_encoder_properties. It is an
+ * OBS_TEXT_INFO property of type OBS_TEXT_INFO_WARNING; frontends may replace
+ * its text with a translation, found by its name. */
+#define OBS_ENCODER_PATENT_NOTICE "knurbs.patent-notice"
+#define OBS_ENCODER_PATENT_NOTICE_TEXT                                                                 \
+	"Knurbs does not grant any license or sublicense to patents. Codecs such as HEVC, AV1 and VVC " \
+	"may be covered by patents where you live, and getting any licenses you need is up to you."
+
 /** Specifies the encoder type */
 enum obs_encoder_type {
 	OBS_ENCODER_AUDIO, /**< The encoder provides an audio codec */
