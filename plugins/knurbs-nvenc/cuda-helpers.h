@@ -33,6 +33,19 @@ typedef struct CudaFunctions {
 	tcuMemHostRegister *cuMemHostRegister;
 	tcuMemHostUnregister *cuMemHostUnregister;
 
+	/* Vulkan interop (optional: NULL on drivers without them) */
+	tcuDeviceGetUuid *cuDeviceGetUuid;
+	tcuStreamCreate *cuStreamCreate;
+	tcuStreamSynchronize *cuStreamSynchronize;
+	tcuStreamDestroy_v2 *cuStreamDestroy;
+	tcuImportExternalMemory *cuImportExternalMemory;
+	tcuDestroyExternalMemory *cuDestroyExternalMemory;
+	tcuExternalMemoryGetMappedBuffer *cuExternalMemoryGetMappedBuffer;
+	tcuImportExternalSemaphore *cuImportExternalSemaphore;
+	tcuDestroyExternalSemaphore *cuDestroyExternalSemaphore;
+	tcuSignalExternalSemaphoresAsync *cuSignalExternalSemaphoresAsync;
+	tcuWaitExternalSemaphoresAsync *cuWaitExternalSemaphoresAsync;
+
 #ifndef _WIN32
 	tcuGLGetDevices_v2 *cuGLGetDevices;
 	tcuGraphicsGLRegisterImage *cuGraphicsGLRegisterImage;

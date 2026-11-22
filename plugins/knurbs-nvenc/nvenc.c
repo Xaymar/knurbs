@@ -131,7 +131,7 @@ static bool init_session(struct nvenc_data *enc)
 	NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS params = {NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER};
 	params.apiVersion = NVENCAPI_VERSION;
 #ifdef _WIN32
-	if (enc->non_texture) {
+	if (enc->non_texture || enc->vulkan) {
 		params.device = enc->cu_ctx;
 		params.deviceType = NV_ENC_DEVICE_TYPE_CUDA;
 	} else {
@@ -882,7 +882,10 @@ static void *nvenc_create_internal(enum codec_type codec, obs_data_t *settings, 
 		goto fail;
 
 #ifdef _WIN32
-	if (texture ? !d3d11_init(enc, settings) : !init_cuda(encoder))
+	obs_enter_graphics();
+	enc->vulkan = texture && gs_get_device_type() == GS_DEVICE_VULKAN;
+	obs_leave_graphics();
+	if (enc->vulkan ? !init_cuda(encoder) : texture ? !d3d11_init(enc, settings) : !init_cuda(encoder))
 		goto fail;
 #else
 	if (!init_cuda(encoder))
@@ -892,8 +895,13 @@ static void *nvenc_create_internal(enum codec_type codec, obs_data_t *settings, 
 	if (NV_FAILED(nv_create_instance(&init)))
 		goto fail;
 
+#ifdef _WIN32
+	if (enc->vulkan ? !vulkan_cuda_ctx_init(enc) : !cuda_ctx_init(enc, settings, texture))
+		goto fail;
+#else
 	if (!cuda_ctx_init(enc, settings, texture))
 		goto fail;
+#endif
 
 	if (!init_session(enc)) {
 		goto fail;
@@ -906,7 +914,7 @@ static void *nvenc_create_internal(enum codec_type codec, obs_data_t *settings, 
 	}
 
 #ifdef _WIN32
-	if (texture ? !d3d11_init_textures(enc) : !cuda_init_surfaces(enc))
+	if (enc->vulkan ? !vulkan_init_inputs(enc) : texture ? !d3d11_init_textures(enc) : !cuda_init_surfaces(enc))
 		goto fail;
 #else
 	if (!cuda_init_surfaces(enc))
@@ -1029,10 +1037,14 @@ static void nvenc_destroy(void *data)
 	struct nvenc_data *enc = data;
 
 	if (enc->encode_started) {
+		if (enc->vulkan)
+			cu->cuCtxPushCurrent(enc->cu_ctx);
 		NV_ENC_PIC_PARAMS params = {NV_ENC_PIC_PARAMS_VER};
 		params.encodePicFlags = NV_ENC_PIC_FLAG_EOS;
 		nv.nvEncEncodePicture(enc->session, &params);
 		get_encoded_packet(enc, true);
+		if (enc->vulkan)
+			cu->cuCtxPopCurrent(NULL);
 	}
 
 	for (size_t i = 0; i < enc->bitstreams.num; i++) {
@@ -1040,6 +1052,8 @@ static void nvenc_destroy(void *data)
 	}
 #ifdef _WIN32
 	d3d11_free_textures(enc);
+	if (enc->vulkan)
+		vulkan_free(enc);
 #else
 	cuda_opengl_free(enc);
 #endif
@@ -1097,7 +1111,7 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
 		size_t cur_bs_idx = enc->cur_bitstream;
 		struct nv_bitstream *bs = &enc->bitstreams.array[cur_bs_idx];
 #ifdef _WIN32
-		struct nv_texture *nvtex = enc->non_texture ? NULL : &enc->textures.array[cur_bs_idx];
+		struct nv_texture *nvtex = enc->non_texture || enc->vulkan ? NULL : &enc->textures.array[cur_bs_idx];
 		struct nv_cuda_surface *surf = enc->non_texture ? &enc->surfaces.array[cur_bs_idx] : NULL;
 #else
 		struct nv_cuda_surface *surf = &enc->surfaces.array[cur_bs_idx];
@@ -1168,6 +1182,8 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
 			}
 			nvtex->mapped_res = NULL;
 		}
+		if (enc->vulkan && !vulkan_release_input(enc, cur_bs_idx))
+			return false;
 #endif
 		/* ---------------- */
 
@@ -1291,7 +1307,7 @@ bool nvenc_encode_base(struct nvenc_data *enc, struct nv_bitstream *bs, void *pi
 	params.inputTimeStamp = (uint64_t)pts;
 	params.inputWidth = enc->cx;
 	params.inputHeight = enc->cy;
-	params.inputPitch = enc->cx;
+	params.inputPitch = enc->input_pitch ? enc->input_pitch : enc->cx;
 	params.outputBitstream = bs->ptr;
 	params.frameIdx = (uint32_t)pts;
 
@@ -1404,14 +1420,14 @@ struct obs_encoder_info h264_nvenc_info = {
 	.id = NVENC_ID_H264,
 	.codec = "h264",
 	.type = OBS_ENCODER_VIDEO,
-	.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_DYN_BITRATE | OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE |
-		OBS_ENCODER_CAP_ROI,
+	.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_SHARED_HANDLES | OBS_ENCODER_CAP_SHARED_BUFFER |
+		OBS_ENCODER_CAP_DYN_BITRATE | OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE | OBS_ENCODER_CAP_ROI,
 	.get_name = h264_nvenc_get_name,
 	.create = h264_nvenc_create,
 	.destroy = nvenc_destroy,
 	.update = nvenc_update,
 #ifdef _WIN32
-	.encode_texture2 = d3d11_encode,
+	.encode_texture2 = nvenc_encode_texture,
 #else
 	.encode_texture2 = cuda_opengl_encode,
 #endif
@@ -1426,14 +1442,14 @@ struct obs_encoder_info hevc_nvenc_info = {
 	.id = NVENC_ID_HEVC,
 	.codec = "hevc",
 	.type = OBS_ENCODER_VIDEO,
-	.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_DYN_BITRATE | OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE |
-		OBS_ENCODER_CAP_ROI,
+	.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_SHARED_HANDLES | OBS_ENCODER_CAP_SHARED_BUFFER |
+		OBS_ENCODER_CAP_DYN_BITRATE | OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE | OBS_ENCODER_CAP_ROI,
 	.get_name = hevc_nvenc_get_name,
 	.create = hevc_nvenc_create,
 	.destroy = nvenc_destroy,
 	.update = nvenc_update,
 #ifdef _WIN32
-	.encode_texture2 = d3d11_encode,
+	.encode_texture2 = nvenc_encode_texture,
 #else
 	.encode_texture2 = cuda_opengl_encode,
 #endif
@@ -1448,14 +1464,14 @@ struct obs_encoder_info av1_nvenc_info = {
 	.id = NVENC_ID_AV1,
 	.codec = "av1",
 	.type = OBS_ENCODER_VIDEO,
-	.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_DYN_BITRATE | OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE |
-		OBS_ENCODER_CAP_ROI,
+	.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_SHARED_HANDLES | OBS_ENCODER_CAP_SHARED_BUFFER |
+		OBS_ENCODER_CAP_DYN_BITRATE | OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE | OBS_ENCODER_CAP_ROI,
 	.get_name = av1_nvenc_get_name,
 	.create = av1_nvenc_create,
 	.destroy = nvenc_destroy,
 	.update = nvenc_update,
 #ifdef _WIN32
-	.encode_texture2 = d3d11_encode,
+	.encode_texture2 = nvenc_encode_texture,
 #else
 	.encode_texture2 = cuda_opengl_encode,
 #endif
