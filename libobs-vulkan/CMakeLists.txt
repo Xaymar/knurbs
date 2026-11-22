@@ -17,12 +17,14 @@ target_sources(
     vulkan-instance.cpp
     vulkan-interop.cpp
     vulkan-pipeline.cpp
+    vulkan-rebuild.cpp
     vulkan-shader.cpp
     vulkan-shaderprocessor.cpp
     vulkan-subsystem.cpp
     vulkan-subsystem.hpp
     vulkan-swapchain.cpp
     vulkan-texture.cpp
+    vulkan-timer.cpp
     vulkan-tracker.cpp
     vulkan-tracker.hpp
 )

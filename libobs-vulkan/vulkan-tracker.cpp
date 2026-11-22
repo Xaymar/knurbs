@@ -242,3 +242,17 @@ void vk_tracker::reset()
 	acquired_images_.clear();
 	acquired_buffers_.clear();
 }
+
+void vk_tracker::clear()
+{
+	images_.clear();
+	buffers_.clear();
+	acquired_images_.clear();
+	acquired_buffers_.clear();
+}
+
+VkImageLayout vk_tracker::layout_of(VkImage image) const
+{
+	auto it = images_.find(key(image));
+	return it == images_.end() ? VK_IMAGE_LAYOUT_UNDEFINED : it->second.layout;
+}

@@ -1,7 +1,8 @@
-// Graphics exports: device lifetime, render target, copy, clear, staging and flush here. Still stubs: cube textures,
-// timers, GDI textures, gs_texture_get_obj, device_get_device_obj, HDR, debug markers, Linux dmabuf and sync.
-// Textures and stage surfaces live in vulkan-texture.cpp, swapchains and present in vulkan-swapchain.cpp, buffers and
-// samplers in vulkan-buffers.cpp, state, pipelines and draw in vulkan-pipeline.cpp.
+// Graphics exports: device lifetime, render target, copy, clear, staging, flush, native objects and debug markers
+// here. Unsupported: cube textures (no user, see device_cubetexture_create), GDI textures; Linux dmabuf and sync are
+// still stubs. Textures and stage surfaces live in vulkan-texture.cpp, swapchains, present and HDR in
+// vulkan-swapchain.cpp, buffers and samplers in vulkan-buffers.cpp, state, pipelines and draw in vulkan-pipeline.cpp,
+// timers in vulkan-timer.cpp, device loss in vulkan-rebuild.cpp.
 #include "vulkan-subsystem.hpp"
 
 #include <graphics/vec4.h>
@@ -95,8 +96,8 @@ EXPORT int device_create(gs_device_t **device, uint32_t adapter)
 		delete d;
 		return ret;
 	}
-	d->pipelines.device = d;
-	vk_glslang_ref(); // keeps glslang's built-in symbol tables alive between compiles
+	d->pipelines.device = d; // vk_device_rebuild sets it again
+	vk_glslang_ref();        // keeps glslang's built-in symbol tables alive between compiles
 	*device = d;
 	return GS_SUCCESS;
 }
@@ -142,25 +143,20 @@ EXPORT bool device_enum_adapters(gs_device_t *device, bool (*callback)(void *, c
 	return true;
 }
 
+// struct gs_vulkan_device (graphics/graphics-vulkan.h): in-process only, see there.
 EXPORT void *device_get_device_obj(gs_device_t *device)
 {
-	return {};
+	return &device->native;
 }
 
+// Cube textures are not supported: nothing in libobs or the plugins creates one or renders into one (no effect
+// declares a texture_cube), and D3D11 is their only user upstream. Logged so a new caller is noticed.
 EXPORT gs_texture_t *device_cubetexture_create(gs_device_t *device, uint32_t size, enum gs_color_format color_format,
 					       uint32_t levels, const uint8_t **data, uint32_t flags)
 {
-	return {};
-}
-
-EXPORT gs_timer_t *device_timer_create(gs_device_t *device)
-{
-	return {};
-}
-
-EXPORT gs_timer_range_t *device_timer_range_create(gs_device_t *device)
-{
-	return {};
+	(void)device, (void)size, (void)color_format, (void)levels, (void)data, (void)flags;
+	blog(LOG_ERROR, "[libobs-vulkan] device_cubetexture_create: cube textures are not supported");
+	return nullptr;
 }
 
 EXPORT gs_texture_t *device_get_render_target(const gs_device_t *device)
@@ -189,8 +185,11 @@ EXPORT void device_set_render_target(gs_device_t *device, gs_texture_t *tex, gs_
 	device_set_render_target_with_color_space(device, tex, zstencil, GS_CS_SRGB);
 }
 
+// See device_cubetexture_create: no cube texture can exist, so there is nothing to bind.
 EXPORT void device_set_cube_render_target(gs_device_t *device, gs_texture_t *cubetex, int side, gs_zstencil_t *zstencil)
 {
+	(void)device, (void)cubetex, (void)side, (void)zstencil;
+	blog(LOG_ERROR, "[libobs-vulkan] device_set_cube_render_target: cube textures are not supported");
 }
 
 // As D3D11's get_copy_compare_format: a format and its _UNORM variant may be copied into each other.
@@ -338,7 +337,11 @@ EXPORT void device_stage_texture(gs_device_t *device, gs_stagesurf_t *dst, gs_te
 	obs_vulkan_test_stage_mip(device, dst, src, 0);
 }
 
-EXPORT void device_begin_frame(gs_device_t *device) {}
+// Safe point for the device-loss rebuild when nothing presents (no display open).
+EXPORT void device_begin_frame(gs_device_t *device)
+{
+	vk_handle_loss(device);
+}
 
 EXPORT void device_end_scene(gs_device_t *device) {}
 
@@ -396,53 +399,73 @@ EXPORT void device_flush(gs_device_t *device)
 	vk_flush(device);
 }
 
+// struct gs_vulkan_texture (graphics/graphics-vulkan.h): in-process only, see there. Filled on each call, so the
+// layout is the one last recorded.
 EXPORT void *gs_texture_get_obj(gs_texture_t *tex)
 {
-	return {};
+	if (!tex) {
+		return nullptr;
+	}
+	gs_vulkan_texture &n = tex->native;
+	n = gs_vulkan_texture{};
+	n.version = GS_VULKAN_OBJECTS_VERSION;
+	n.image = tex->image;
+	n.view = tex->view;
+	n.srgb_view = tex->srgb_view;
+	n.format = vk_is_plane(tex) ? tex->image_format : tex->rt_format ? tex->rt_format : vk_format(tex->format);
+	n.aspect = tex->aspect;
+	n.image_layout = tex->image ? tex->device->tracker.layout_of(tex->image) : VK_IMAGE_LAYOUT_UNDEFINED;
+	n.width = tex->width;
+	n.height = tex->height;
+	n.depth = tex->depth;
+	n.levels = tex->levels;
+	return &n;
 }
 
-EXPORT void gs_cubetexture_destroy(gs_texture_t *cubetex) {}
+EXPORT void gs_cubetexture_destroy(gs_texture_t *cubetex)
+{
+	(void)cubetex; // none can exist (device_cubetexture_create)
+}
 
 EXPORT uint32_t gs_cubetexture_get_size(const gs_texture_t *cubetex)
 {
-	return {};
+	(void)cubetex;
+	return 0;
 }
 
 EXPORT enum gs_color_format gs_cubetexture_get_color_format(const gs_texture_t *cubetex)
 {
-	return {};
+	(void)cubetex;
+	return GS_UNKNOWN;
 }
 
-EXPORT void gs_timer_destroy(gs_timer_t *timer) {}
-
-EXPORT void gs_timer_begin(gs_timer_t *timer) {}
-
-EXPORT void gs_timer_end(gs_timer_t *timer) {}
-
-EXPORT bool gs_timer_get_data(gs_timer_t *timer, uint64_t *ticks)
+// VK_EXT_debug_utils labels in the recorded commands (RenderDoc, Nsight, PIX); no-ops without the extension. A label
+// open across a submission is ended and begun again in the next command buffer (vk_frame_ring::labels).
+EXPORT void device_debug_marker_begin(gs_device_t *device, const char *markername, const float color[4])
 {
-	return {};
+	if (!device->frames.begin_label) {
+		return;
+	}
+	VkCommandBuffer cmd = vk_frame_cmd(device); // begins a frame first, which re-opens the labels already open
+	vk_frame_ring::label l = {markername ? markername : "", {1.0f, 1.0f, 1.0f, 1.0f}};
+	if (color) {
+		for (int i = 0; i < 4; ++i) {
+			l.color[i] = color[i];
+		}
+	}
+	device->frames.labels.push_back(l);
+	device->frames.record_label(cmd, device->frames.labels.back());
 }
 
-EXPORT void gs_timer_range_destroy(gs_timer_range_t *range) {}
-
-EXPORT void gs_timer_range_begin(gs_timer_range_t *range) {}
-
-EXPORT void gs_timer_range_end(gs_timer_range_t *range) {}
-
-EXPORT bool gs_timer_range_get_data(gs_timer_range_t *range, bool *disjoint, uint64_t *frequency)
+EXPORT void device_debug_marker_end(gs_device_t *device)
 {
-	return {};
+	if (!device->frames.end_label || device->frames.labels.empty()) {
+		return;
+	}
+	VkCommandBuffer cmd = vk_frame_cmd(device); // a new frame has re-opened this one too
+	device->frames.labels.pop_back();
+	device->frames.end_label(cmd);
 }
-
-EXPORT bool device_is_monitor_hdr(gs_device_t *device, void *monitor)
-{
-	return {};
-}
-
-EXPORT void device_debug_marker_begin(gs_device_t *device, const char *markername, const float color[4]) {}
-
-EXPORT void device_debug_marker_end(gs_device_t *device) {}
 
 #ifdef __APPLE__
 

@@ -74,7 +74,8 @@ static bool loader_available(const gs_device *d)
 #endif
 }
 
-static int create_instance(gs_device *d)
+// `reopen`: the device-loss rebuild; the validation message count carries on.
+static int create_instance(gs_device *d, bool reopen)
 {
 	if (!loader_available(d))
 		return GS_ERROR_NOT_SUPPORTED;
@@ -85,7 +86,7 @@ static int create_instance(gs_device *d)
 		return GS_ERROR_NOT_SUPPORTED;
 
 	const char *layers[1] = {};
-	const char *exts[3] = {};
+	const char *exts[4] = {};
 	uint32_t nlayers = 0, nexts = 0;
 
 	uint32_t n = 0;
@@ -104,7 +105,15 @@ static int create_instance(gs_device *d)
 	if (surfaces) {
 		exts[nexts++] = VK_KHR_SURFACE_EXTENSION_NAME;
 		exts[nexts++] = surface_ext;
+		// HDR and 16F swapchains (EXTENDED_SRGB_LINEAR); SDR swapchains work without it.
+		d->colorspace_ext = has_ext(eprops, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+		if (d->colorspace_ext)
+			exts[nexts++] = VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME;
 	}
+	// Debug labels (device_debug_marker_*) for capture tools, and the validation messenger.
+	const bool debug_utils = has_ext(eprops, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+	if (debug_utils)
+		exts[nexts++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 
 	const char *env = getenv("OBS_VULKAN_VALIDATION");
 	if (env && !strcmp(env, "1")) {
@@ -115,9 +124,8 @@ static int create_instance(gs_device *d)
 		for (auto &p : props)
 			layer |= !strcmp(p.layerName, "VK_LAYER_KHRONOS_validation");
 
-		if (layer && has_ext(eprops, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
+		if (layer && debug_utils) {
 			layers[nlayers++] = "VK_LAYER_KHRONOS_validation";
-			exts[nexts++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 		} else {
 			blog(LOG_WARNING, "[libobs-vulkan] OBS_VULKAN_VALIDATION=1 but the validation layer is missing");
 		}
@@ -138,13 +146,26 @@ static int create_instance(gs_device *d)
 	ci.enabledExtensionCount = nexts;
 	ci.ppEnabledExtensionNames = exts;
 	VkInstance instance = VK_NULL_HANDLE;
+	const int count = validation_messages; // what vkCreateInstance reports (loader notes) is not counted
 	if (vkCreateInstance(&ci, nullptr, &instance) != VK_SUCCESS)
 		return GS_ERROR_NOT_SUPPORTED;
+	validation_messages = count;
 	d->instance = instance;
 	d->can_present = surfaces; // and VK_KHR_swapchain, checked in create_device
+	if (debug_utils) {
+		d->frames.begin_label = (PFN_vkCmdBeginDebugUtilsLabelEXT)vkGetInstanceProcAddr(
+			instance, "vkCmdBeginDebugUtilsLabelEXT");
+		d->frames.end_label =
+			(PFN_vkCmdEndDebugUtilsLabelEXT)vkGetInstanceProcAddr(instance, "vkCmdEndDebugUtilsLabelEXT");
+		if (!d->frames.begin_label || !d->frames.end_label) {
+			d->frames.begin_label = nullptr;
+			d->frames.end_label = nullptr;
+		}
+	}
 
 	if (nlayers) {
-		validation_messages = 0;
+		if (!reopen || validation_messages < 0)
+			validation_messages = 0;
 		auto create = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
 			d->instance, "vkCreateDebugUtilsMessengerEXT");
 		if (create)
@@ -260,6 +281,7 @@ static int create_device(gs_device *d, uint32_t adapter)
 	core.samplerAnisotropy = feats.features.samplerAnisotropy;
 	d->anisotropy = feats.features.samplerAnisotropy;
 	en12.samplerMirrorClampToEdge = d->mirror_clamp = f12.samplerMirrorClampToEdge;
+	en12.hostQueryReset = f12.hostQueryReset; // timers reset their queries from the host when they can
 	d->limits = props.properties.limits;
 
 	// Queue families: first graphics family, plus a transfer-only family when one exists.
@@ -436,6 +458,19 @@ static int create_device(gs_device *d, uint32_t adapter)
 	if (!d->frames.init(d->dev, d->graphics.family))
 		return GS_ERROR_FAIL;
 	vk_interop_init(d, interop_exts);
+	vk_timers_init(d, fams[gfx].queueFamilyProperties.timestampValidBits, f12.hostQueryReset);
+
+	gs_vulkan_device &nat = d->native;
+	nat = gs_vulkan_device{};
+	nat.version = GS_VULKAN_OBJECTS_VERSION;
+	nat.api_version = VK_API_VERSION_1_3;
+	nat.instance = d->instance;
+	nat.physical_device = d->phys;
+	nat.device = d->dev;
+	nat.queue = d->graphics.q;
+	nat.queue_family_index = d->graphics.family;
+	nat.queue_index = 0;
+	nat.get_instance_proc_addr = vkGetInstanceProcAddr;
 	return GS_SUCCESS;
 }
 
@@ -455,42 +490,78 @@ int vk_device_init(gs_device *d, uint32_t adapter)
 	d->test_no_loader = hook("OBS_VULKAN_TEST_NO_LOADER", active);
 	d->test_refuse_realtime = hook("OBS_VULKAN_TEST_REFUSE_REALTIME", active);
 	d->frames.test_fail_submit = hook("OBS_VULKAN_TEST_FAIL_SUBMIT", active);
+	d->test_monitor_hdr = hook("OBS_VULKAN_TEST_MONITOR_HDR", active);
+	// A count, not a switch: the N-th submit reports VK_ERROR_DEVICE_LOST.
+	const char *lose = getenv("OBS_VULKAN_TEST_DEVICE_LOST");
+	const long lose_after = lose ? strtol(lose, nullptr, 10) : 0;
+	if (lose_after > 0) {
+		d->frames.test_lose_after = (uint32_t)lose_after;
+		active += std::string(active.empty() ? "" : ", ") +
+			  "OBS_VULKAN_TEST_DEVICE_LOST=" + std::to_string(lose_after);
+	}
 	if (!active.empty())
 		blog(LOG_WARNING, "[libobs-vulkan] test hook active: %s", active.c_str());
 
-	int ret = create_instance(d);
-	if (ret == GS_SUCCESS)
-		ret = create_device(d, adapter);
+	d->adapter = adapter;
+	int ret = vk_device_open(d);
 	if (ret != GS_SUCCESS)
 		vk_device_free(d);
 	return ret;
 }
 
-void vk_device_free(gs_device *d)
+int vk_device_open(gs_device *d)
+{
+	const bool reopen = d->rebuilds > 0 || d->frames.lost;
+	int ret = create_instance(d, reopen);
+	if (ret == GS_SUCCESS)
+		ret = create_device(d, d->adapter);
+	return ret;
+}
+
+void vk_device_close(gs_device *d)
 {
 	if (d->dev)
 		vkDeviceWaitIdle(d->dev);
 	d->frames.destroy(); // runs deferred work, which returns acquire semaphores to spare_sems
+	vk_timers_free(d);
 	vk_interop_free(d);
 	vk_pipelines_free(d);
 	if (d->acquire_wait)
 		d->spare_sems.push_back(d->acquire_wait);
+	d->acquire_wait = VK_NULL_HANDLE;
 	for (VkSemaphore s : d->spare_sems)
 		vkDestroySemaphore(d->dev, s, nullptr);
+	d->spare_sems.clear();
 	if (d->vma)
 		vmaDestroyAllocator(d->vma);
-	for (vk_queue *q : {&d->graphics, &d->transfer})
+	d->vma = VK_NULL_HANDLE;
+	d->frames.vma = VK_NULL_HANDLE;
+	for (vk_queue *q : {&d->graphics, &d->transfer}) {
 		if (q->timeline)
 			vkDestroySemaphore(d->dev, q->timeline, nullptr);
+		*q = vk_queue{};
+	}
 	if (d->dev)
 		vkDestroyDevice(d->dev, nullptr);
+	d->dev = VK_NULL_HANDLE;
 	if (d->messenger) {
 		auto destroy = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
 			d->instance, "vkDestroyDebugUtilsMessengerEXT");
 		if (destroy)
 			destroy(d->instance, d->messenger, nullptr);
 	}
+	d->messenger = VK_NULL_HANDLE;
 	if (d->instance)
 		vkDestroyInstance(d->instance, nullptr);
+	d->instance = VK_NULL_HANDLE;
+	d->phys = VK_NULL_HANDLE;
+	d->frames.begin_label = nullptr;
+	d->frames.end_label = nullptr;
+	d->native = gs_vulkan_device{};
+}
+
+void vk_device_free(gs_device *d)
+{
+	vk_device_close(d);
 	*d = gs_device{};
 }

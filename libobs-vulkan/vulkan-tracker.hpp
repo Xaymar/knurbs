@@ -38,6 +38,10 @@ public:
 	// After a failed submission: forgets all state (layouts restart at UNDEFINED) except that external resources
 	// stay external and released, in GENERAL.
 	void reset();
+	// Device rebuild: forgets every resource, external ones too (their handles are gone).
+	void clear();
+	// The layout last recorded for `image` (UNDEFINED when untracked).
+	VkImageLayout layout_of(VkImage image) const;
 
 private:
 	// shortcut: images are tracked whole (every aspect the access names, all mips/layers). The only queue family

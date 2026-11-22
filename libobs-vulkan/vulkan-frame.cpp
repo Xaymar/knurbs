@@ -86,7 +86,10 @@ vk_frame &vk_frame_ring::begin()
 		wi.semaphoreCount = 1;
 		wi.pSemaphores = &f.done_sem;
 		wi.pValues = &f.done_value;
-		vkWaitSemaphores(dev, &wi, UINT64_MAX);
+		// A lost device returns in finite time; the slot is reused anyway (its work is gone).
+		if (vkWaitSemaphores(dev, &wi, UINT64_MAX) == VK_ERROR_DEVICE_LOST) {
+			lost = true;
+		}
 		f.done_value = 0;
 	}
 	run_deferred(f);
@@ -97,7 +100,23 @@ vk_frame &vk_frame_ring::begin()
 	bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 	vkBeginCommandBuffer(f.cmd, &bi);
 	recording = true;
+	for (const label &l : labels) {
+		record_label(f.cmd, l);
+	}
 	return f;
+}
+
+void vk_frame_ring::record_label(VkCommandBuffer cmd, const label &l) const
+{
+	if (!begin_label) {
+		return;
+	}
+	VkDebugUtilsLabelEXT li = {VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
+	li.pLabelName = l.name.c_str();
+	for (int i = 0; i < 4; ++i) {
+		li.color[i] = l.color[i];
+	}
+	begin_label(cmd, &li);
 }
 
 void vk_frame_ring::defer_destroy(std::function<void()> fn)
@@ -127,6 +146,11 @@ bool vk_frame_ring::submit(vk_queue &q, VkSemaphore *wait, VkSemaphore *signal, 
 		return false;
 	}
 	recording = false;
+	if (end_label) {
+		for (size_t i = 0; i < labels.size(); ++i) {
+			end_label(f.cmd);
+		}
+	}
 	vkEndCommandBuffer(f.cmd);
 
 	const uint64_t value = q.next_value;
@@ -164,7 +188,15 @@ bool vk_frame_ring::submit(vk_queue &q, VkSemaphore *wait, VkSemaphore *signal, 
 	si.signalSemaphoreInfoCount = (uint32_t)signals.size();
 	si.pSignalSemaphoreInfos = signals.data();
 
-	VkResult res = test_fail_submit ? VK_ERROR_OUT_OF_HOST_MEMORY : vkQueueSubmit2(q.q, 1, &si, VK_NULL_HANDLE);
+	if (test_lose_after && !--test_lose_after) {
+		test_lost = true;
+	}
+	VkResult res = test_lost          ? VK_ERROR_DEVICE_LOST
+		       : test_fail_submit ? VK_ERROR_OUT_OF_HOST_MEMORY
+					  : vkQueueSubmit2(q.q, 1, &si, VK_NULL_HANDLE);
+	if (res == VK_ERROR_DEVICE_LOST) {
+		lost = true;
+	}
 	if (result) {
 		*result = res;
 	}

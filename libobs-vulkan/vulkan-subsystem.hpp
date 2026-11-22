@@ -1,11 +1,13 @@
 #pragma once
 
 #include <graphics/graphics.h>
+#include <graphics/graphics-vulkan.h>
 #include <graphics/matrix4.h>
 
 #include <string.h>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -91,10 +93,39 @@ struct vk_pipeline_cache {
 	void forget(gs_shader *shader); // destroys (deferred) everything built from `shader`
 };
 
+// Every live object of a device, for the device-loss rebuild (vulkan-rebuild.cpp), which recreates their Vulkan
+// objects in place so the gs_* pointers libobs and plugins hold stay valid. Swapchain targets are not listed (their
+// swapchain is).
+struct vk_objects {
+	std::unordered_set<gs_texture *> textures;
+	std::unordered_set<gs_zstencil_buffer *> zstencils;
+	std::unordered_set<gs_stage_surface *> stagesurfs;
+	std::unordered_set<gs_sampler_state *> samplers;
+	std::unordered_set<gs_vertex_buffer *> vertex_buffers;
+	std::unordered_set<gs_index_buffer *> index_buffers;
+	std::unordered_set<gs_shader *> shaders;
+	std::unordered_set<gs_swap_chain *> swapchains;
+	std::unordered_set<gs_timer *> timers;
+	std::unordered_set<gs_shared_buffer *> sharedbufs;
+	std::unordered_set<gs_timeline *> timelines;
+};
+
+// Timestamp queries for gs_timer_t: two consecutive queries per timer in fixed-size pools, recycled once the GPU has
+// finished the frame a destroyed timer was last used in.
+struct vk_timer_pools {
+	static constexpr uint32_t pool_size = 512; // queries per VkQueryPool
+	std::vector<VkQueryPool> pools;
+	std::vector<uint32_t> free; // first query of each free pair
+	uint32_t valid_bits = 0;    // graphics family timestampValidBits; 0: no timestamps (timers report nothing)
+	double period = 1.0;        // nanoseconds per tick
+	bool host_reset = false;    // hostQueryReset enabled
+};
+
 // Threading: every graphics export is called with libobs's graphics context held (gs_enter_context), so all calls on
 // a device and its objects are serialised and nothing here locks. Only module globals are touched outside that lock:
 // the glslang reference count (its mutex), the validation message counter and the host priority (atomics).
 struct gs_device {
+	uint32_t adapter = 0; // as passed to device_create; the rebuild after a device loss opens the same one
 	VkInstance instance = VK_NULL_HANDLE;
 	VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
 	VkPhysicalDevice phys = VK_NULL_HANDLE;
@@ -112,11 +143,22 @@ struct gs_device {
 	VkSemaphore acquire_wait = VK_NULL_HANDLE; // signalled by the last acquire; the next submit waits on it
 	std::vector<VkSemaphore> spare_sems;       // unsignalled binary semaphores for acquires
 	VkPhysicalDeviceLimits limits = {};
-	bool anisotropy = false;   // samplerAnisotropy enabled
-	bool mirror_clamp = false; // samplerMirrorClampToEdge enabled (GS_ADDRESS_MIRRORONCE)
-	// Test hooks, read once by vk_device_init (see also frames.test_fail_submit).
+	bool anisotropy = false;      // samplerAnisotropy enabled
+	bool mirror_clamp = false;    // samplerMirrorClampToEdge enabled (GS_ADDRESS_MIRRORONCE)
+	bool colorspace_ext = false;  // VK_EXT_swapchain_colorspace enabled (HDR and 16F swapchains)
+	gs_vulkan_device native = {}; // device_get_device_obj
+	vk_timer_pools timers;
+	// Test hooks, read once by vk_device_init (see also frames.test_fail_submit and frames.test_lose_after).
 	bool test_no_loader = false;       // OBS_VULKAN_TEST_NO_LOADER=1: behave as without vulkan-1.dll
 	bool test_refuse_realtime = false; // OBS_VULKAN_TEST_REFUSE_REALTIME=1: a realtime priority is refused
+	// Test hook OBS_VULKAN_TEST_MONITOR_HDR=1 (device_is_monitor_hdr and the swapchain colour space): every monitor
+	// reports HDR, so the HDR swapchain paths run without an HDR display. Tests may toggle it.
+	bool test_monitor_hdr = false;
+
+	// Device loss (vulkan-rebuild.cpp).
+	vk_objects objects;
+	std::vector<gs_device_loss> loss_callbacks;
+	uint32_t rebuilds = 0; // completed rebuilds (read by tests)
 
 	// Draw state, CPU side until device_draw.
 	vk_state state;
@@ -193,6 +235,19 @@ struct gs_texture {
 	uint32_t shared_handle = 0xFFFFFFFFu; // legacy open_shared/open_nt_shared: the handle it was opened from
 	bool keyed_mutex = false;             // imported D3D11 texture with a keyed mutex
 	void *km_probe = nullptr; // keyed mutex textures: IDXGIKeyedMutex on the D3D11 probe (finite-timeout acquires)
+
+	// How it was created, so the device-loss rebuild can create it again (vulkan-rebuild.cpp).
+	enum origin_t : uint8_t {
+		ORIGIN_NONE,       // swapchain target (rebuilt with its swapchain)
+		ORIGIN_CREATED,    // device_texture_create / device_voltexture_create
+		ORIGIN_PLANAR,     // device_texture_create_nv12 / _p010
+		ORIGIN_EXPORTABLE, // device_texture_create_exportable
+		ORIGIN_IMPORTED,   // gs_texture_import, open_shared, open_nt_shared
+	} origin = ORIGIN_NONE;
+	uint32_t req_levels = 0, req_flags = 0;    // ORIGIN_CREATED: the arguments as passed
+	std::vector<std::vector<uint8_t>> initial; // ORIGIN_CREATED: initial data per given level (empty: none)
+	bool shared_nt = false;                    // open_shared (false) or open_nt_shared (true), with shared_handle
+	gs_vulkan_texture native = {};             // gs_texture_get_obj
 };
 
 // Exportable pitch-linear NV12/P010 frame (gs_sharedbuf_*).
@@ -210,6 +265,19 @@ struct gs_timeline {
 	gs_device *device;
 	VkSemaphore sem = VK_NULL_HANDLE;
 	bool exportable = false;
+	bool imported = false;   // the device-loss rebuild replaces an import by a local timeline (vulkan-rebuild.cpp)
+	uint64_t last_value = 0; // highest value seen on the CPU side, the initial value after a rebuild
+};
+
+struct gs_timer {
+	gs_device *device;
+	uint32_t query = UINT32_MAX; // first of its two queries (vk_timer_pools); UINT32_MAX: none (no timestamps)
+	uint64_t value = 0; // graphics timeline value of the submission holding the end timestamp; 0: not ended
+	bool begun = false;
+};
+
+struct gs_timer_range {
+	gs_device *device;
 };
 
 // Create parameters of an external (exportable or imported) texture, the same as device_texture_create (single
@@ -253,6 +321,7 @@ struct gs_zstencil_buffer {
 	VkFormat format = VK_FORMAT_UNDEFINED;
 	VkImageAspectFlags aspect = 0; // DEPTH, plus STENCIL for formats that have it
 	uint32_t width, height;
+	enum gs_zstencil_format gs_format = GS_ZS_NONE; // as created (rebuild)
 };
 
 struct gs_stage_surface {
@@ -275,15 +344,17 @@ struct gs_swap_chain {
 	VkSurfaceFormatKHR surface_format = {};
 	uint32_t cx = 0, cy = 0; // requested size
 	std::vector<VkImage> images;
-	std::vector<VkImageView> views;        // per image; the target's rt_view while it is acquired
-	std::vector<VkSemaphore> present_sems; // per image: reusable once that image is acquired again
-	gs_texture target;                     // `image` is the acquired image, null when none is
-	uint32_t image = UINT32_MAX;           // acquired index
-	bool recreate = false;                 // out of date, suboptimal or after a failed submit
-	enum gs_color_space space = GS_CS_SRGB;
-	bool test_not_ready = false;  // test hook: acquire behaves as VK_NOT_READY
-	bool test_suboptimal = false; // test hook: a successful acquire reports VK_SUBOPTIMAL_KHR
-	uint32_t builds = 0;          // swapchains created (read by tests; handles may be reused)
+	std::vector<VkImageView> views;         // per image; the target's rt_view while it is acquired
+	std::vector<VkSemaphore> present_sems;  // per image: reusable once that image is acquired again
+	gs_texture target;                      // `image` is the acquired image, null when none is
+	uint32_t image = UINT32_MAX;            // acquired index
+	bool recreate = false;                  // out of date, suboptimal or after a failed submit
+	enum gs_color_space space = GS_CS_SRGB; // as D3D11's get_next_space for the window's monitor (choose_format)
+	struct gs_window window = {};           // as created; the device-loss rebuild creates the surface again
+	enum gs_color_format init_format = GS_UNKNOWN; // gs_init_data::format, the SDR format
+	bool test_not_ready = false;                   // test hook: acquire behaves as VK_NOT_READY
+	bool test_suboptimal = false;                  // test hook: a successful acquire reports VK_SUBOPTIMAL_KHR
+	uint32_t builds = 0;                           // swapchains created (read by tests; handles may be reused)
 };
 
 struct gs_sampler_state {
@@ -405,6 +476,66 @@ void vk_record_barriers(VkCommandBuffer cmd, const vk_barriers &b);
 // Returns GS_SUCCESS, GS_ERROR_FAIL (bad adapter) or GS_ERROR_NOT_SUPPORTED; leaks nothing on failure.
 int vk_device_init(gs_device *d, uint32_t adapter);
 void vk_device_free(gs_device *d);
+// The instance and device part of vk_device_init (no test hooks read), for d->adapter. The rebuild uses it.
+int vk_device_open(gs_device *d);
+// Destroys everything vk_device_open created and the device-level objects made since (frames, pipelines, spare
+// semaphores, timer pools, interop), and nulls their handles; objects in d->objects must be released first.
+void vk_device_close(gs_device *d);
+
+/* ---- Device loss (vulkan-rebuild.cpp) -------------------------------------------------------------------------- */
+
+// Records a VK_ERROR_DEVICE_LOST result; returns r.
+VkResult vk_check(gs_device *d, VkResult r);
+inline bool vk_lost(const gs_device *d)
+{
+	return d->frames.lost;
+}
+// At a safe point (device_begin_frame, device_is_present_ready, device_present): rebuilds the device when it was
+// lost. As D3D11's RebuildDevice: device_loss_release callbacks, every object's Vulkan objects destroyed, a new
+// instance and device, every object created again in place, then device_loss_rebuild callbacks.
+void vk_handle_loss(gs_device *d);
+
+// Per-type parts of the rebuild. release: destroy the object's Vulkan objects now (the GPU is idle) and null them.
+// recreate: create them again on the new device from what the object kept; false (logged) when that failed, the
+// object then has none and its uses fail as for an unset object.
+void vk_texture_release(gs_device *d, gs_texture *t);
+bool vk_texture_recreate(gs_device *d, gs_texture *t); // ORIGIN_CREATED and ORIGIN_PLANAR
+// Gives `t` (and its plane peer, when t is a Y view) the Vulkan objects of the texture(s) `make` creates with t's
+// parameters: one texture, or both plane views. A UV view whose Y view exists is left to that one (true).
+bool vk_texture_adopt(gs_device *d, gs_texture *t, const std::function<bool(gs_texture **, gs_texture **)> &make);
+// A texture of t's size, format (or planar layout) and render-target flag with undefined contents, in place of an
+// external texture whose memory cannot be had again (vulkan-interop.cpp).
+bool vk_texture_recreate_placeholder(gs_device *d, gs_texture *t);
+bool vk_interop_recreate_texture(gs_device *d, gs_texture *t); // ORIGIN_EXPORTABLE and ORIGIN_IMPORTED
+void vk_zstencil_release(gs_device *d, gs_zstencil_buffer *zs);
+bool vk_zstencil_recreate(gs_device *d, gs_zstencil_buffer *zs);
+void vk_stagesurf_release(gs_device *d, gs_stage_surface *s);
+bool vk_stagesurf_recreate(gs_device *d, gs_stage_surface *s);
+void vk_buffers_release(gs_device *d);  // vertex and index buffers and sampler states
+bool vk_buffers_recreate(gs_device *d); // false when any failed
+void vk_swapchain_release(gs_swap_chain *s);
+bool vk_swapchain_recreate(gs_swap_chain *s);
+void vk_sharedbuf_release(gs_device *d, gs_shared_buffer *b);
+bool vk_sharedbuf_recreate(gs_device *d, gs_shared_buffer *b);
+void vk_timeline_release(gs_device *d, gs_timeline *t);
+bool vk_timeline_recreate(gs_device *d, gs_timeline *t);
+
+/* ---- Timers (vulkan-timer.cpp) --------------------------------------------------------------------------------- */
+
+// Reads timestampValidBits/timestampPeriod; called by vk_device_open.
+void vk_timers_init(gs_device *d, uint32_t valid_bits, bool host_reset);
+// Destroys the query pools (GPU idle); live timers keep no query (vk_timer_recreate gives them new ones).
+void vk_timers_free(gs_device *d);
+void vk_timer_recreate(gs_device *d, gs_timer *t);
+
+/* ---- HDR (vulkan-swapchain.cpp) -------------------------------------------------------------------------------- */
+
+// The colour space and swapchain surface format libobs-d3d11 would pick for a window on a monitor that is HDR
+// (`hdr`) or has `bits` bits per colour: GS_CS_709_SCRGB on HDR monitors, GS_CS_SRGB_16F on SDR monitors of more
+// than 8 bits (both R16G16B16A16_SFLOAT in EXTENDED_SRGB_LINEAR, as D3D11's G10_NONE_P709), else GS_CS_SRGB in the
+// init format. A space whose format `formats` lacks falls back to GS_CS_SRGB. False when not even that exists.
+bool vk_choose_surface_format(const std::vector<VkSurfaceFormatKHR> &formats, enum gs_color_format init_format,
+			      bool hdr, uint32_t bits, enum gs_color_space &space, VkSurfaceFormatKHR &out);
 
 // Name and driver version of the adapter chosen by the last successful vk_device_init.
 const char *vk_adapter_name();
@@ -419,6 +550,12 @@ EXPORT void obs_vulkan_test_stage_mip(gs_device_t *device, gs_stagesurf_t *dst, 
 EXPORT int obs_vulkan_glslang_refs(void);
 // Test hook: reads back the first `size` bytes of a gs_sharedbuf_t (waits for the GPU).
 EXPORT bool obs_vulkan_test_read_sharedbuf(gs_sharedbuf_t *buf, void *dst, uint64_t size);
+// Test hook: what device_is_monitor_hdr reads for `monitor` (HMONITOR): HDR (ST.2084 output) and bits per colour.
+EXPORT bool obs_vulkan_test_monitor_info(gs_device_t *device, void *monitor, bool *hdr, uint32_t *bits);
+// Test hook: vk_choose_surface_format.
+EXPORT bool obs_vulkan_test_choose_surface_format(const VkSurfaceFormatKHR *formats, uint32_t count,
+						  enum gs_color_format init_format, bool hdr, uint32_t bits,
+						  enum gs_color_space *space, VkSurfaceFormatKHR *out);
 // Host API (optional, not a graphics import): global priority the graphics queue of devices created from now on
 // asks for, as a VkQueueGlobalPriorityKHR value (128 low, the default; 256 medium; 512 high; 1024 realtime).
 // OBS_VULKAN_REALTIME=1 overrides it with realtime. Returns 0 for any other value (unchanged), 1 otherwise.

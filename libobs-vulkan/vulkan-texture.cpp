@@ -207,6 +207,7 @@ static gs_texture *create_texture(gs_device *device, enum gs_texture_type type, 
 		blog(LOG_ERROR, "[libobs-vulkan] device_texture_create: unsupported format %d", (int)color_format);
 		return nullptr;
 	}
+	const uint32_t req_levels = levels, req_flags = flags;
 	const bool vol = type == GS_TEXTURE_3D;
 	if (vol && (flags & (GS_RENDER_TARGET | GS_DYNAMIC))) {
 		// shortcut: no core effect or plugin renders into or maps a volume texture; D3D11 allows both.
@@ -317,6 +318,23 @@ static gs_texture *create_texture(gs_device *device, enum gs_texture_type type, 
 		delete tex;
 		return nullptr;
 	}
+	// As D3D11's BackupTexture: the initial data is kept, so the device-loss rebuild restores the contents.
+	tex->origin = gs_texture::ORIGIN_CREATED;
+	tex->req_levels = req_levels;
+	tex->req_flags = req_flags;
+	if (data) {
+		const uint32_t bpp = gs_get_format_bpp(color_format) / 8;
+		const uint32_t n = build_mips ? 1 : levels;
+		tex->initial.resize(n);
+		for (uint32_t i = 0; i < n; ++i) {
+			if (data[i]) {
+				const size_t size =
+					(size_t)mip_size(width, i) * mip_size(height, i) * mip_size(depth, i) * bpp;
+				tex->initial[i].assign(data[i], data[i] + size);
+			}
+		}
+	}
+	device->objects.textures.insert(tex);
 	return tex;
 }
 
@@ -479,6 +497,11 @@ static bool create_planar(gs_device *d, gs_texture **tex_y, gs_texture **tex_uv,
 	}
 	y->plane_peer = uv;
 	uv->plane_peer = y;
+	for (gs_texture *t : {y, uv}) {
+		t->origin = gs_texture::ORIGIN_PLANAR;
+		t->req_flags = flags;
+		d->objects.textures.insert(t);
+	}
 	*tex_y = y;
 	*tex_uv = uv;
 	return true;
@@ -506,6 +529,7 @@ static gs_stage_surface *create_planar_stagesurface(gs_device *d, uint32_t width
 		delete s;
 		return nullptr;
 	}
+	d->objects.stagesurfs.insert(s);
 	return s;
 }
 
@@ -578,6 +602,8 @@ bool vk_wrap_image(gs_device *d, VkImage image, uint32_t width, uint32_t height,
 		}
 		y->plane_peer = uv;
 		uv->plane_peer = y;
+		d->objects.textures.insert(y);
+		d->objects.textures.insert(uv);
 		*tex = y;
 		*tex_uv = uv;
 		return true;
@@ -608,6 +634,7 @@ bool vk_wrap_image(gs_device *d, VkImage image, uint32_t width, uint32_t height,
 		delete t;
 		return false;
 	}
+	d->objects.textures.insert(t);
 	*tex = t;
 	return true;
 }
@@ -699,6 +726,7 @@ EXPORT void gs_texture_destroy(gs_texture_t *tex)
 			t = nullptr;
 		}
 	}
+	d->objects.textures.erase(tex);
 	destroy_texture_objects(d, tex);
 	delete tex;
 }
@@ -861,6 +889,7 @@ EXPORT gs_zstencil_t *device_zstencil_create(gs_device_t *device, uint32_t width
 		     (fmt == VK_FORMAT_D16_UNORM || fmt == VK_FORMAT_D32_SFLOAT ? 0 : VK_IMAGE_ASPECT_STENCIL_BIT);
 	zs->width = width;
 	zs->height = height;
+	zs->gs_format = format;
 	if (vmaCreateImage(device->vma, &ii, &ai, &zs->image, &zs->alloc, nullptr) != VK_SUCCESS) {
 		blog(LOG_ERROR, "[libobs-vulkan] device_zstencil_create: vmaCreateImage failed");
 		delete zs;
@@ -877,6 +906,7 @@ EXPORT gs_zstencil_t *device_zstencil_create(gs_device_t *device, uint32_t width
 		delete zs;
 		return nullptr;
 	}
+	device->objects.zstencils.insert(zs);
 	return zs;
 }
 
@@ -889,6 +919,7 @@ EXPORT void gs_zstencil_destroy(gs_zstencil_t *zstencil)
 	if (d->zstencil == zstencil) {
 		d->zstencil = nullptr;
 	}
+	d->objects.zstencils.erase(zstencil);
 	d->tracker.forget(zstencil->image);
 	d->frames.defer_destroy(
 		[dev = d->dev, vma = d->vma, view = zstencil->view, image = zstencil->image, alloc = zstencil->alloc] {
@@ -918,6 +949,7 @@ EXPORT gs_stagesurf_t *device_stagesurface_create(gs_device_t *device, uint32_t 
 		delete s;
 		return nullptr;
 	}
+	device->objects.stagesurfs.insert(s);
 	return s;
 }
 
@@ -927,6 +959,7 @@ EXPORT void gs_stagesurface_destroy(gs_stagesurf_t *stagesurf)
 		return;
 	}
 	gs_device *d = stagesurf->device;
+	d->objects.stagesurfs.erase(stagesurf);
 	d->tracker.forget(stagesurf->buffer);
 	d->frames.defer_destroy([vma = d->vma, buffer = stagesurf->buffer, alloc = stagesurf->alloc] {
 		vmaDestroyBuffer(vma, buffer, alloc);
@@ -954,8 +987,8 @@ EXPORT bool gs_stagesurface_map(gs_stagesurf_t *stagesurf, uint8_t **data, uint3
 {
 	gs_device *d = stagesurf->device;
 	const uint64_t value = stagesurf->copy_value;
-	if (value && value >= d->graphics.next_value && !vk_flush(d)) {
-		return false;
+	if (!stagesurf->buffer || (value && value >= d->graphics.next_value && !vk_flush(d)) || vk_lost(d)) {
+		return false; // a lost device's copies never ran
 	}
 	if (value) {
 		// Never submitted (would wait forever) or its submission failed (the copy never ran).
@@ -967,7 +1000,7 @@ EXPORT bool gs_stagesurface_map(gs_stagesurf_t *stagesurf, uint8_t **data, uint3
 		wi.semaphoreCount = 1;
 		wi.pSemaphores = &d->graphics.timeline;
 		wi.pValues = &value;
-		if (vkWaitSemaphores(d->dev, &wi, UINT64_MAX) != VK_SUCCESS) {
+		if (vk_check(d, vkWaitSemaphores(d->dev, &wi, UINT64_MAX)) != VK_SUCCESS) {
 			return false;
 		}
 	}
@@ -979,4 +1012,165 @@ EXPORT bool gs_stagesurface_map(gs_stagesurf_t *stagesurf, uint8_t **data, uint3
 
 // Persistently mapped, nothing to do.
 EXPORT void gs_stagesurface_unmap(gs_stagesurf_t *stagesurf) {}
+}
+
+/* ---- Device-loss rebuild (vulkan-rebuild.cpp) ------------------------------------------------------------------- */
+
+void vk_texture_release(gs_device *d, gs_texture *t)
+{
+	// The image of a plane pair goes with the Y view (or with whichever view is left alone).
+	const bool owns_image = !t->plane_peer || t->aspect != VK_IMAGE_ASPECT_PLANE_1_BIT;
+	for (VkImageView v : {t->view, t->srgb_view, t->rt_view, t->rt_srgb_view}) {
+		vkDestroyImageView(d->dev, v, nullptr);
+	}
+	if (owns_image) {
+		vmaDestroyImage(d->vma, t->image, t->alloc); // external textures: alloc is null, only the image goes
+		if (t->memory) {
+			vkFreeMemory(d->dev, t->memory, nullptr);
+		}
+	}
+	if (t->km_probe) {
+		vk_interop_release(t->km_probe);
+		t->km_probe = nullptr;
+	}
+	t->view = t->srgb_view = t->rt_view = t->rt_srgb_view = VK_NULL_HANDLE;
+	t->image = VK_NULL_HANDLE;
+	t->alloc = VK_NULL_HANDLE;
+	t->memory = VK_NULL_HANDLE;
+	t->map_ptr = nullptr; // its arena went with the frames
+	t->map_buf = {};
+	t->map_alloc = VK_NULL_HANDLE;
+}
+
+// Moves everything of `fresh` (made with t's parameters, so equal but for its Vulkan objects) into `t`, which keeps
+// its address and plane peer; `fresh` is deleted.
+static void adopt(gs_device *d, gs_texture *t, gs_texture *fresh)
+{
+	d->objects.textures.erase(fresh);
+	gs_texture *peer = t->plane_peer;
+	*t = std::move(*fresh);
+	t->plane_peer = peer;
+	delete fresh;
+}
+
+bool vk_texture_adopt(gs_device *d, gs_texture *t, const std::function<bool(gs_texture **, gs_texture **)> &make)
+{
+	const bool plane = vk_is_plane(t);
+	if (plane && t->aspect == VK_IMAGE_ASPECT_PLANE_1_BIT && t->plane_peer) {
+		return true; // rebuilt with its Y view
+	}
+	gs_texture *y = plane ? t : nullptr;
+	gs_texture *uv = plane ? t->plane_peer : nullptr;
+	if (plane && t->aspect == VK_IMAGE_ASPECT_PLANE_1_BIT) { // alone: its Y view was destroyed
+		y = nullptr;
+		uv = t;
+	}
+	gs_texture *a = nullptr, *b = nullptr;
+	if (!make(&a, &b) || !a || (plane && !b)) {
+		gs_texture_destroy(a);
+		gs_texture_destroy(b);
+		return false;
+	}
+	if (!plane) {
+		gs_texture_destroy(b);
+		adopt(d, t, a);
+		return true;
+	}
+	// A view whose old counterpart is gone is dropped (which unlinks it from the other fresh view).
+	if (!y) {
+		gs_texture_destroy(a);
+	}
+	if (!uv) {
+		gs_texture_destroy(b);
+	}
+	if (y) {
+		adopt(d, y, a);
+	}
+	if (uv) {
+		adopt(d, uv, b);
+	}
+	return true;
+}
+
+// Size of the image `t` views: the Y plane's for plane views.
+static void image_size(const gs_texture *t, uint32_t &w, uint32_t &h)
+{
+	const bool uv = t->aspect == VK_IMAGE_ASPECT_PLANE_1_BIT;
+	w = uv ? t->width * 2 : t->width;
+	h = uv ? t->height * 2 : t->height;
+}
+
+bool vk_texture_recreate(gs_device *d, gs_texture *t)
+{
+	if (t->origin == gs_texture::ORIGIN_PLANAR) {
+		uint32_t w, h;
+		image_size(t, w, h);
+		const bool p010 = t->image_format == p010_format.image;
+		return vk_texture_adopt(d, t, [&](gs_texture **a, gs_texture **b) {
+			return create_planar(d, a, b, w, h, t->req_flags, p010);
+		});
+	}
+	std::vector<const uint8_t *> data;
+	for (const std::vector<uint8_t> &level : t->initial) {
+		data.push_back(level.empty() ? nullptr : level.data());
+	}
+	return vk_texture_adopt(d, t, [&](gs_texture **a, gs_texture **) {
+		*a = create_texture(d, t->type, t->width, t->height, t->depth, t->format, t->req_levels,
+				    data.empty() ? nullptr : data.data(), t->req_flags);
+		return *a != nullptr;
+	});
+}
+
+bool vk_texture_recreate_placeholder(gs_device *d, gs_texture *t)
+{
+	const uint32_t flags = t->create_flags & GS_RENDER_TARGET;
+	if (vk_is_plane(t)) {
+		uint32_t w, h;
+		image_size(t, w, h);
+		const bool p010 = t->image_format == p010_format.image;
+		return vk_texture_adopt(d, t, [&](gs_texture **a, gs_texture **b) {
+			return create_planar(d, a, b, w, h, flags, p010);
+		});
+	}
+	return vk_texture_adopt(d, t, [&](gs_texture **a, gs_texture **) {
+		*a = create_texture(d, GS_TEXTURE_2D, t->width, t->height, 1, t->format, 1, nullptr, flags);
+		return *a != nullptr;
+	});
+}
+
+void vk_zstencil_release(gs_device *d, gs_zstencil_buffer *zs)
+{
+	vkDestroyImageView(d->dev, zs->view, nullptr);
+	vmaDestroyImage(d->vma, zs->image, zs->alloc);
+	zs->view = VK_NULL_HANDLE;
+	zs->image = VK_NULL_HANDLE;
+	zs->alloc = VK_NULL_HANDLE;
+}
+
+bool vk_zstencil_recreate(gs_device *d, gs_zstencil_buffer *zs)
+{
+	gs_zstencil_buffer *fresh = device_zstencil_create(d, zs->width, zs->height, zs->gs_format);
+	if (!fresh) {
+		return false;
+	}
+	d->objects.zstencils.erase(fresh);
+	*zs = *fresh;
+	delete fresh;
+	return true;
+}
+
+void vk_stagesurf_release(gs_device *d, gs_stage_surface *s)
+{
+	vmaDestroyBuffer(d->vma, s->buffer, s->alloc);
+	s->buffer = VK_NULL_HANDLE;
+	s->alloc = VK_NULL_HANDLE;
+	s->mapped = nullptr;
+	s->copy_value = 0; // never staged on the new device
+}
+
+bool vk_stagesurf_recreate(gs_device *d, gs_stage_surface *s)
+{
+	const VkDeviceSize rows = s->planar ? (VkDeviceSize)s->height * 3 / 2 : s->height;
+	return vk_create_host_buffer(d, (VkDeviceSize)s->linesize * rows, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				     VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT, s->buffer, s->alloc, s->mapped);
 }

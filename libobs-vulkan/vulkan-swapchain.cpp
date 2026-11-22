@@ -1,14 +1,176 @@
-// Swapchains, acquire and present.
+// Swapchains, acquire and present, and HDR: the swapchain's colour space follows its window's monitor as libobs-d3d11
+// picks it (vk_choose_surface_format).
 #include "vulkan-subsystem.hpp"
 
 #include <util/base.h>
 
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <dxgi1_6.h>
 #include <vulkan/vulkan_win32.h>
 #endif
 
 #include <algorithm>
+#include <mutex>
+
+/* ---- Monitors and surface formats ------------------------------------------------------------------------------ */
+
+#ifdef _WIN32
+// As D3D11's GetMonitorColorInfo: the DXGI output showing the monitor, cached per monitor until the DXGI factory is no
+// longer current (a display was added, removed or changed mode). Module-wide: monitors do not depend on the device.
+static std::mutex monitor_mutex;
+static IDXGIFactory1 *monitor_factory = nullptr;
+struct monitor_entry {
+	HMONITOR monitor;
+	bool hdr;
+	uint32_t bits;
+};
+static std::vector<monitor_entry> monitor_cache;
+
+static void monitor_color_info(HMONITOR monitor, bool &hdr, uint32_t &bits)
+{
+	hdr = false;
+	bits = 8;
+	std::lock_guard<std::mutex> lock(monitor_mutex);
+	if (!monitor_factory || !monitor_factory->IsCurrent()) {
+		if (monitor_factory) {
+			monitor_factory->Release();
+			monitor_factory = nullptr;
+		}
+		monitor_cache.clear();
+		if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&monitor_factory))) {
+			monitor_factory = nullptr;
+			return;
+		}
+	}
+	for (const monitor_entry &e : monitor_cache) {
+		if (e.monitor == monitor) {
+			hdr = e.hdr;
+			bits = e.bits;
+			return;
+		}
+	}
+	IDXGIAdapter1 *adapter = nullptr;
+	for (UINT a = 0; monitor_factory->EnumAdapters1(a, &adapter) == S_OK; ++a) {
+		IDXGIOutput *output = nullptr;
+		for (UINT o = 0; adapter->EnumOutputs(o, &output) == S_OK; ++o) {
+			IDXGIOutput6 *output6 = nullptr;
+			DXGI_OUTPUT_DESC1 desc1;
+			const bool match =
+				SUCCEEDED(output->QueryInterface(__uuidof(IDXGIOutput6), (void **)&output6)) &&
+				SUCCEEDED(output6->GetDesc1(&desc1)) && desc1.Monitor == monitor;
+			if (output6) {
+				output6->Release();
+			}
+			output->Release();
+			if (match) {
+				hdr = desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+				bits = desc1.BitsPerColor;
+				monitor_cache.push_back({monitor, hdr, bits});
+				adapter->Release();
+				return;
+			}
+		}
+		adapter->Release();
+	}
+}
+#endif
+
+// What the swapchain's window's monitor reports (D3D11's get_next_space input); SDR 8-bit when unknown.
+static void window_monitor(gs_device *d, const gs_window &window, bool &hdr, uint32_t &bits)
+{
+	hdr = false;
+	bits = 8;
+#ifdef _WIN32
+	HMONITOR m = MonitorFromWindow((HWND)window.hwnd, MONITOR_DEFAULTTONEAREST);
+	if (m) {
+		monitor_color_info(m, hdr, bits);
+	}
+#else
+	(void)window;
+#endif
+	if (d->test_monitor_hdr) {
+		hdr = true;
+		bits = 10;
+	}
+}
+
+// HDR10 (A2B10G10R10 in HDR10_ST2084) is not chosen: libobs has no gs_color_space for PQ-encoded output, so it would
+// render scRGB values into a PQ swapchain, and libobs-d3d11 never creates one either (scRGB 16F for both HDR and
+// high bit depth SDR monitors, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709).
+bool vk_choose_surface_format(const std::vector<VkSurfaceFormatKHR> &formats, enum gs_color_format init_format,
+			      bool hdr, uint32_t bits, enum gs_color_space &space, VkSurfaceFormatKHR &out)
+{
+	auto find = [&](VkFormat f, VkColorSpaceKHR cs) {
+		for (const VkSurfaceFormatKHR &sf : formats) {
+			if (sf.format == f && sf.colorSpace == cs) {
+				out = sf;
+				return true;
+			}
+		}
+		return false;
+	};
+	if ((hdr || bits > 8) && find(VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT)) {
+		space = hdr ? GS_CS_709_SCRGB : GS_CS_SRGB_16F;
+		return true;
+	}
+	space = GS_CS_SRGB;
+	return find(vk_format(init_format), VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+}
+
+// Picks s->space and s->surface_format for the window's monitor now. False when the surface offers no usable format.
+static bool select_format(gs_swap_chain *s)
+{
+	gs_device *d = s->device;
+	uint32_t n = 0;
+	vk_check(d, vkGetPhysicalDeviceSurfaceFormatsKHR(d->phys, s->surface, &n, nullptr));
+	std::vector<VkSurfaceFormatKHR> formats(n);
+	vk_check(d, vkGetPhysicalDeviceSurfaceFormatsKHR(d->phys, s->surface, &n, formats.data()));
+	formats.resize(n);
+	bool hdr;
+	uint32_t bits;
+	window_monitor(d, s->window, hdr, bits);
+	if (!d->colorspace_ext) {
+		hdr = false; // EXTENDED_SRGB_LINEAR needs VK_EXT_swapchain_colorspace
+		bits = 8;
+	}
+	enum gs_color_space space;
+	VkSurfaceFormatKHR sf;
+	if (!vk_choose_surface_format(formats, s->init_format, hdr, bits, space, sf)) {
+		return false;
+	}
+	if ((hdr || bits > 8) && space == GS_CS_SRGB) {
+		blog(LOG_WARNING, "[libobs-vulkan] swapchain: monitor is %s but the surface has no scRGB format; SDR",
+		     hdr ? "HDR" : "high bit depth");
+	}
+	s->space = space;
+	s->surface_format = sf;
+	s->target.format = space == GS_CS_SRGB ? s->init_format : GS_RGBA16F;
+	return true;
+}
+
+static bool create_surface(gs_device *d, const gs_window &window, VkSurfaceKHR &surface)
+{
+	surface = VK_NULL_HANDLE;
+#ifdef _WIN32
+	VkWin32SurfaceCreateInfoKHR wi = {VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
+	wi.hinstance = GetModuleHandleW(nullptr);
+	wi.hwnd = (HWND)window.hwnd;
+	if (vkCreateWin32SurfaceKHR(d->instance, &wi, nullptr, &surface) != VK_SUCCESS) {
+		blog(LOG_ERROR, "[libobs-vulkan] device_swapchain_create: vkCreateWin32SurfaceKHR failed");
+		surface = VK_NULL_HANDLE;
+		return false;
+	}
+	return true;
+#else
+	// TODO(linux): Xlib/xcb (window.display, window.id) and Wayland surfaces. Not written: their headers and instance
+	// extensions cannot be built or tested in this (Windows-only) branch.
+	(void)d, (void)window;
+	blog(LOG_ERROR, "[libobs-vulkan] device_swapchain_create: no surface support on this platform yet");
+	return false;
+#endif
+}
 
 static VkSemaphore take_sem(gs_device *d)
 {
@@ -31,8 +193,8 @@ void vk_consume_semaphore(gs_device *d, VkSemaphore sem)
 	VkSubmitInfo2 si = {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
 	si.waitSemaphoreInfoCount = 1;
 	si.pWaitSemaphoreInfos = &w;
-	if (vkQueueSubmit2(d->graphics.q, 1, &si, VK_NULL_HANDLE) == VK_SUCCESS &&
-	    vkQueueWaitIdle(d->graphics.q) == VK_SUCCESS) {
+	if (vk_check(d, vkQueueSubmit2(d->graphics.q, 1, &si, VK_NULL_HANDLE)) == VK_SUCCESS &&
+	    vk_check(d, vkQueueWaitIdle(d->graphics.q)) == VK_SUCCESS) {
 		d->spare_sems.push_back(sem);
 		return;
 	}
@@ -177,10 +339,55 @@ static bool extent_changed(gs_swap_chain *s)
 static void destroy_swap(gs_swap_chain *s)
 {
 	gs_device *d = s->device;
+	d->objects.swapchains.erase(s);
 	release_images(s);
 	vkDestroySwapchainKHR(d->dev, s->swapchain, nullptr);
 	vkDestroySurfaceKHR(d->instance, s->surface, nullptr);
 	delete s;
+}
+
+// Surface support, format choice and the first build; `what` names the caller in the log.
+static bool init_swap(gs_swap_chain *s, const char *what)
+{
+	gs_device *d = s->device;
+	VkBool32 supported = VK_FALSE;
+	vk_check(d, vkGetPhysicalDeviceSurfaceSupportKHR(d->phys, d->graphics.family, s->surface, &supported));
+	const bool found = supported && select_format(s);
+	if (!supported || !found || !build(s)) {
+		blog(LOG_ERROR, "[libobs-vulkan] %s: cannot present (support %d, format %d)", what, (int)supported,
+		     (int)found);
+		return false;
+	}
+	blog(LOG_INFO, "[libobs-vulkan] %s: format %d, colour space %d (gs_color_space %d)", what,
+	     (int)s->surface_format.format, (int)s->surface_format.colorSpace, (int)s->space);
+	return true;
+}
+
+void vk_swapchain_release(gs_swap_chain *s)
+{
+	gs_device *d = s->device; // GPU idle (rebuild)
+	for (VkSemaphore p : s->present_sems) {
+		vkDestroySemaphore(d->dev, p, nullptr);
+	}
+	for (VkImageView v : s->views) {
+		vkDestroyImageView(d->dev, v, nullptr);
+	}
+	vkDestroySwapchainKHR(d->dev, s->swapchain, nullptr);
+	vkDestroySurfaceKHR(d->instance, s->surface, nullptr);
+	s->present_sems.clear();
+	s->views.clear();
+	s->images.clear();
+	s->swapchain = VK_NULL_HANDLE;
+	s->surface = VK_NULL_HANDLE;
+	s->image = UINT32_MAX;
+	s->target.image = VK_NULL_HANDLE;
+	s->target.rt_view = VK_NULL_HANDLE;
+	s->recreate = false;
+}
+
+bool vk_swapchain_recreate(gs_swap_chain *s)
+{
+	return create_surface(s->device, s->window, s->surface) && init_swap(s, "device rebuild: swapchain");
 }
 
 extern "C" {
@@ -191,50 +398,21 @@ EXPORT gs_swapchain_t *device_swapchain_create(gs_device_t *device, const struct
 		blog(LOG_ERROR, "[libobs-vulkan] device_swapchain_create: surface or swapchain extensions missing");
 		return nullptr;
 	}
-
 	VkSurfaceKHR surface = VK_NULL_HANDLE;
-#ifdef _WIN32
-	VkWin32SurfaceCreateInfoKHR wi = {VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
-	wi.hinstance = GetModuleHandleW(nullptr);
-	wi.hwnd = (HWND)data->window.hwnd;
-	if (vkCreateWin32SurfaceKHR(device->instance, &wi, nullptr, &surface) != VK_SUCCESS) {
-		blog(LOG_ERROR, "[libobs-vulkan] device_swapchain_create: vkCreateWin32SurfaceKHR failed");
+	if (!create_surface(device, data->window, surface)) {
 		return nullptr;
 	}
-#else
-	// TODO(linux): Xlib/xcb (data->window.display, data->window.id) and Wayland surfaces. Not written: their headers
-	// and instance extensions cannot be built or tested in this (Windows-only) branch.
-	blog(LOG_ERROR, "[libobs-vulkan] device_swapchain_create: no surface support on this platform yet");
-	return nullptr;
-#endif
 
 	auto s = new gs_swap_chain{device, surface};
 	s->cx = data->cx;
 	s->cy = data->cy;
+	s->window = data->window;
+	s->init_format = data->format;
 	s->target.device = device;
 	s->target.levels = 1;
 	s->target.format = data->format;
-
-	VkBool32 supported = VK_FALSE;
-	vkGetPhysicalDeviceSurfaceSupportKHR(device->phys, device->graphics.family, surface, &supported);
-
-	// shortcut: SDR only, the init format with SRGB_NONLINEAR; HDR needs VK_EXT_swapchain_colorspace.
-	const VkFormat want = vk_format(data->format);
-	uint32_t n = 0;
-	vkGetPhysicalDeviceSurfaceFormatsKHR(device->phys, surface, &n, nullptr);
-	std::vector<VkSurfaceFormatKHR> formats(n);
-	vkGetPhysicalDeviceSurfaceFormatsKHR(device->phys, surface, &n, formats.data());
-	bool found = false;
-	for (const VkSurfaceFormatKHR &f : formats) {
-		if (f.format == want && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-			s->surface_format = f;
-			found = true;
-		}
-	}
-
-	if (!supported || !found || !build(s)) {
-		blog(LOG_ERROR, "[libobs-vulkan] device_swapchain_create: cannot present (support %d, format %d)",
-		     (int)supported, (int)found);
+	device->objects.swapchains.insert(s);
+	if (!init_swap(s, "device_swapchain_create")) {
 		destroy_swap(s);
 		return nullptr;
 	}
@@ -275,7 +453,15 @@ EXPORT void device_resize(gs_device_t *device, uint32_t cx, uint32_t cy)
 	}
 	s->cx = cx;
 	s->cy = cy;
+	// As D3D11's device_resize: the colour space follows the monitor the window is on now.
+	const enum gs_color_space old = s->space;
+	if (s->surface && !select_format(s)) {
+		blog(LOG_ERROR, "[libobs-vulkan] device_resize: no surface format");
+	}
 	build(s);
+	if (old != s->space && device->render_target == &s->target) {
+		device->space = s->space;
+	}
 }
 
 EXPORT enum gs_color_space device_get_color_space(gs_device_t *device)
@@ -283,13 +469,70 @@ EXPORT enum gs_color_space device_get_color_space(gs_device_t *device)
 	return device->space;
 }
 
-// shortcut: swapchains are SDR (SRGB_NONLINEAR) only, so the space never changes; HDR needs
-// VK_EXT_swapchain_colorspace and monitor HDR detection (device_is_monitor_hdr), add with the HDR work.
+// As D3D11: the window may now be on another monitor, or the monitor's HDR setting changed. Rebuilds the swapchain
+// (sync point) only when the colour space changes.
 EXPORT void device_update_color_space(gs_device_t *device)
 {
-	if (!device->swap) {
+	gs_swap_chain *s = device->swap;
+	if (!s) {
 		blog(LOG_WARNING, "[libobs-vulkan] device_update_color_space: no active swap");
+		return;
 	}
+	const enum gs_color_space old_space = s->space;
+	const VkSurfaceFormatKHR old_format = s->surface_format;
+	if (!s->surface || !select_format(s)) {
+		return;
+	}
+	if (s->space == old_space && s->surface_format.format == old_format.format &&
+	    s->surface_format.colorSpace == old_format.colorSpace) {
+		return;
+	}
+	build(s);
+	if (device->render_target == &s->target) {
+		device->space = s->space;
+	}
+}
+
+EXPORT bool device_is_monitor_hdr(gs_device_t *device, void *monitor)
+{
+	bool hdr = false;
+	uint32_t bits = 8;
+	obs_vulkan_test_monitor_info(device, monitor, &hdr, &bits);
+	return hdr;
+}
+
+EXPORT bool obs_vulkan_test_monitor_info(gs_device_t *device, void *monitor, bool *hdr, uint32_t *bits)
+{
+	*hdr = false;
+	*bits = 8;
+#ifdef _WIN32
+	if (monitor) {
+		monitor_color_info((HMONITOR)monitor, *hdr, *bits);
+	}
+#else
+	(void)monitor;
+#endif
+	if (device && device->test_monitor_hdr) {
+		*hdr = true;
+		*bits = 10;
+	}
+	return true;
+}
+
+EXPORT bool obs_vulkan_test_choose_surface_format(const VkSurfaceFormatKHR *formats, uint32_t count,
+						  enum gs_color_format init_format, bool hdr, uint32_t bits,
+						  enum gs_color_space *space, VkSurfaceFormatKHR *out)
+{
+	return vk_choose_surface_format(std::vector<VkSurfaceFormatKHR>(formats, formats + count), init_format, hdr,
+					bits, *space, *out);
+}
+
+// D3D11 reports false only on NVIDIA D3D11 drivers older than 31.0.15.2737, whose clears flicker in multi-GPU
+// systems (obs-display.c's clear workaround). That is a D3D11 driver issue; Vulkan clears need no workaround.
+EXPORT bool device_can_adapter_fast_clear(gs_device_t *device)
+{
+	(void)device;
+	return true;
 }
 
 EXPORT void device_get_size(const gs_device_t *device, uint32_t *x, uint32_t *y)
@@ -312,6 +555,7 @@ EXPORT uint32_t device_get_height(const gs_device_t *device)
 // shortcut: readiness is the acquire with timeout 0, not VK_KHR_present_wait; see the task 5 report.
 EXPORT bool device_is_present_ready(gs_device_t *device)
 {
+	vk_handle_loss(device); // safe point: nothing of this frame is recorded yet
 	gs_swap_chain *s = device->swap;
 	if (!s) {
 		blog(LOG_WARNING, "[libobs-vulkan] device_is_present_ready: no active swap");
@@ -332,9 +576,9 @@ EXPORT bool device_is_present_ready(gs_device_t *device)
 		}
 		VkSemaphore sem = take_sem(device);
 		uint32_t idx = 0;
-		VkResult r = s->test_not_ready
-				     ? VK_NOT_READY
-				     : vkAcquireNextImageKHR(device->dev, s->swapchain, 0, sem, VK_NULL_HANDLE, &idx);
+		VkResult r = s->test_not_ready ? VK_NOT_READY
+					       : vk_check(device, vkAcquireNextImageKHR(device->dev, s->swapchain, 0,
+											sem, VK_NULL_HANDLE, &idx));
 		if (r == VK_SUCCESS && s->test_suboptimal) {
 			r = VK_SUBOPTIMAL_KHR;
 		}
@@ -390,8 +634,10 @@ EXPORT void device_present(gs_device_t *device)
 	VkSemaphore done = s->present_sems[idx];
 	if (!vk_flush(device, &done)) {
 		// `done` will never be signalled: skip the present. The rebuild on the next acquire destroys the
-		// swapchain, which releases the image that stays acquired.
+		// swapchain, which releases the image that stays acquired. A lost device is rebuilt here, as D3D11's
+		// device_present rebuilds on DXGI_ERROR_DEVICE_REMOVED.
 		s->recreate = true;
+		vk_handle_loss(device);
 		return;
 	}
 
@@ -401,7 +647,11 @@ EXPORT void device_present(gs_device_t *device)
 	pi.swapchainCount = 1;
 	pi.pSwapchains = &s->swapchain;
 	pi.pImageIndices = &idx;
-	VkResult r = vkQueuePresentKHR(device->graphics.q, &pi);
+	VkResult r = vk_check(device, vkQueuePresentKHR(device->graphics.q, &pi));
+	if (vk_lost(device)) {
+		vk_handle_loss(device);
+		return;
+	}
 	if (r == VK_SUBOPTIMAL_KHR) {
 		s->recreate = s->recreate || extent_changed(s);
 	} else if (r != VK_SUCCESS) {

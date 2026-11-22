@@ -24,6 +24,7 @@
 
 #include <errno.h>
 #include <string.h>
+#include <algorithm>
 #include <atomic>
 #include <vector>
 
@@ -439,6 +440,11 @@ static bool import_texture(gs_device *d, const gs_shared_texture_desc &desc, gs_
 		return false;
 	}
 	set_external_textures(d, *tex, uv, memory, ai.allocationSize, 0, desc.layout, desc.flags, desc.keyed_mutex);
+	for (gs_texture *t : {*tex, uv}) {
+		if (t) {
+			t->origin = gs_texture::ORIGIN_IMPORTED;
+		}
+	}
 	if (desc.keyed_mutex) {
 		(*tex)->km_probe = open_probe_mutex(d, handle, desc.type == GS_HANDLE_WIN32_D3D11);
 		if (!(*tex)->km_probe) {
@@ -609,6 +615,7 @@ static gs_texture *open_legacy(gs_device *d, uint32_t handle, bool nt)
 		return nullptr;
 	}
 	tex->shared_handle = handle;
+	tex->shared_nt = nt;
 	return tex;
 }
 #endif
@@ -662,7 +669,7 @@ static bool initial_release(gs_device *d, VkImage image, VkBuffer buffer)
 	wi.semaphoreCount = 1;
 	wi.pSemaphores = &d->graphics.timeline;
 	wi.pValues = &value;
-	return vkWaitSemaphores(d->dev, &wi, UINT64_MAX) == VK_SUCCESS;
+	return vk_check(d, vkWaitSemaphores(d->dev, &wi, UINT64_MAX)) == VK_SUCCESS;
 }
 
 // Dedicated, exportable device-local memory for `image` or `buffer`.
@@ -734,6 +741,11 @@ static bool create_exportable(gs_device *d, uint32_t width, uint32_t height, enu
 		return false;
 	}
 	set_external_textures(d, *tex, uv, memory, size, ht, layout, flags, false);
+	for (gs_texture *t : {*tex, uv}) {
+		if (t) {
+			t->origin = gs_texture::ORIGIN_EXPORTABLE;
+		}
+	}
 	if (tex_uv) {
 		*tex_uv = uv;
 	}
@@ -836,6 +848,7 @@ static gs_shared_buffer *create_sharedbuf(gs_device *d, uint32_t width, uint32_t
 	}
 	b->size = size; // the allocation, which an importer must use
 	d->tracker.set_external(b->buffer);
+	d->objects.sharedbufs.insert(b);
 	return b;
 }
 
@@ -922,6 +935,7 @@ EXPORT void gs_sharedbuf_destroy(gs_sharedbuf_t *buf)
 		return;
 	}
 	gs_device *d = buf->device;
+	d->objects.sharedbufs.erase(buf);
 	d->tracker.forget(buf->buffer);
 	d->frames.defer_destroy([dev = d->dev, buffer = buf->buffer, memory = buf->memory] {
 		vkDestroyBuffer(dev, buffer, nullptr);
@@ -1031,6 +1045,8 @@ EXPORT gs_timeline_t *device_timeline_create(gs_device_t *device, uint64_t initi
 	auto t = new gs_timeline{device};
 	t->sem = sem;
 	t->exportable = exportable;
+	t->last_value = initial_value;
+	device->objects.timelines.insert(t);
 	return t;
 }
 
@@ -1058,6 +1074,8 @@ EXPORT gs_timeline_t *device_timeline_import(gs_device_t *device, const struct g
 	}
 	auto t = new gs_timeline{device};
 	t->sem = sem;
+	t->imported = true;
+	device->objects.timelines.insert(t);
 	return t;
 #else
 	return nullptr;
@@ -1106,6 +1124,7 @@ EXPORT void gs_timeline_destroy(gs_timeline_t *timeline)
 		return;
 	}
 	gs_device *d = timeline->device;
+	d->objects.timelines.erase(timeline);
 	drop_pending(d->pending.waits, timeline->sem);
 	drop_pending(d->pending.signals, timeline->sem);
 	d->frames.defer_destroy([dev = d->dev, sem = timeline->sem] { vkDestroySemaphore(dev, sem, nullptr); });
@@ -1120,6 +1139,8 @@ EXPORT bool device_timeline_signal(gs_device_t *device, gs_timeline_t *timeline,
 	s.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 	device->pending.signals.push_back(s);
 	vk_frame_cmd(device); // a submission even when nothing is recorded
+	// After a device loss the new timeline starts here, so waiters on it do not hang (vk_timeline_recreate).
+	timeline->last_value = std::max(timeline->last_value, value);
 	return vk_flush(device);
 }
 
@@ -1140,7 +1161,9 @@ EXPORT bool device_timeline_wait(gs_device_t *device, gs_timeline_t *timeline, u
 EXPORT uint64_t device_timeline_get_value(gs_device_t *device, gs_timeline_t *timeline)
 {
 	uint64_t v = 0;
-	vkGetSemaphoreCounterValue(device->dev, timeline->sem, &v);
+	if (vk_check(device, vkGetSemaphoreCounterValue(device->dev, timeline->sem, &v)) == VK_SUCCESS) {
+		timeline->last_value = std::max(timeline->last_value, v);
+	}
 	return v;
 }
 
@@ -1150,7 +1173,10 @@ EXPORT int device_timeline_wait_cpu(gs_device_t *device, gs_timeline_t *timeline
 	wi.semaphoreCount = 1;
 	wi.pSemaphores = &timeline->sem;
 	wi.pValues = &value;
-	const VkResult r = vkWaitSemaphores(device->dev, &wi, timeout_ns);
+	const VkResult r = vk_check(device, vkWaitSemaphores(device->dev, &wi, timeout_ns));
+	if (r == VK_SUCCESS) {
+		timeline->last_value = std::max(timeline->last_value, value);
+	}
 	return r == VK_SUCCESS ? 0 : r == VK_TIMEOUT ? ETIMEDOUT : -1;
 }
 
@@ -1163,7 +1189,11 @@ EXPORT bool device_timeline_signal_cpu(gs_device_t *device, gs_timeline_t *timel
 	VkSemaphoreSignalInfo si = {VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
 	si.semaphore = timeline->sem;
 	si.value = value;
-	return vkSignalSemaphore(device->dev, &si) == VK_SUCCESS;
+	if (vk_check(device, vkSignalSemaphore(device->dev, &si)) != VK_SUCCESS) {
+		return false;
+	}
+	timeline->last_value = value;
+	return true;
 }
 
 // Test hook: copies the first `size` bytes of `buf` to `dst` (after all work recorded so far) and waits for them.
@@ -1204,7 +1234,7 @@ EXPORT bool obs_vulkan_test_read_sharedbuf(gs_sharedbuf_t *buf, void *dst, uint6
 	wi.semaphoreCount = 1;
 	wi.pSemaphores = &d->graphics.timeline;
 	wi.pValues = &value;
-	ok = ok && vkWaitSemaphores(d->dev, &wi, UINT64_MAX) == VK_SUCCESS;
+	ok = ok && vk_check(d, vkWaitSemaphores(d->dev, &wi, UINT64_MAX)) == VK_SUCCESS;
 	if (ok) {
 		vmaInvalidateAllocation(d->vma, alloc, 0, VK_WHOLE_SIZE);
 		memcpy(dst, mapped, (size_t)size);
@@ -1296,4 +1326,87 @@ EXPORT int device_texture_release_sync(gs_texture_t *tex, uint64_t key)
 }
 
 #endif
+}
+
+/* ---- Device-loss rebuild (vulkan-rebuild.cpp) ------------------------------------------------------------------- */
+
+bool vk_interop_recreate_texture(gs_device *d, gs_texture *t)
+{
+	const bool uv = t->aspect == VK_IMAGE_ASPECT_PLANE_1_BIT;
+	const uint32_t w = uv ? t->width * 2 : t->width, h = uv ? t->height * 2 : t->height;
+	if (t->origin == gs_texture::ORIGIN_EXPORTABLE) {
+		// New memory, so new handles: exported ones are dead, consumers export again after device_loss_rebuild.
+		const enum gs_color_format format = t->layout == GS_SHARED_SINGLE ? t->format : GS_UNKNOWN;
+		const enum gs_shared_layout layout = t->layout;
+		const uint32_t flags = t->create_flags;
+		return vk_texture_adopt(d, t, [&](gs_texture **a, gs_texture **b) {
+			return create_exportable(d, w, h, format, layout, flags, a, b);
+		});
+	}
+	// Imported: the memory belongs to another API or process, and an import borrows its handle, so none is kept. A
+	// legacy KMT handle is a name, opened again as D3D11 does. Anything else (or a failed open) gets a placeholder of
+	// the same size and format with undefined contents; its owner imports again from its device_loss_rebuild.
+#ifdef _WIN32
+	if (t->shared_handle != invalid_handle && !t->shared_nt) {
+		const uint32_t handle = t->shared_handle;
+		if (vk_texture_adopt(d, t, [&](gs_texture **a, gs_texture **) {
+			    *a = open_legacy(d, handle, false);
+			    return *a != nullptr;
+		    })) {
+			return true;
+		}
+	}
+#endif
+	blog(LOG_WARNING,
+	     "[libobs-vulkan] device rebuild: imported %ux%u texture replaced by a placeholder; its owner must import "
+	     "it again",
+	     w, h);
+	return vk_texture_recreate_placeholder(d, t);
+}
+
+void vk_sharedbuf_release(gs_device *d, gs_shared_buffer *b)
+{
+	vkDestroyBuffer(d->dev, b->buffer, nullptr);
+	vkFreeMemory(d->dev, b->memory, nullptr);
+	b->buffer = VK_NULL_HANDLE;
+	b->memory = VK_NULL_HANDLE;
+}
+
+bool vk_sharedbuf_recreate(gs_device *d, gs_shared_buffer *b)
+{
+	gs_shared_buffer *fresh = create_sharedbuf(d, b->width, b->height, b->layout);
+	if (!fresh) {
+		return false;
+	}
+	d->objects.sharedbufs.erase(fresh);
+	*b = *fresh;
+	delete fresh;
+	return true;
+}
+
+void vk_timeline_release(gs_device *d, gs_timeline *t)
+{
+	vkDestroySemaphore(d->dev, t->sem, nullptr);
+	t->sem = VK_NULL_HANDLE;
+}
+
+// A local timeline at the last value seen (an import's other side is on the lost device too, or must hand over a
+// new handle), exportable when the device can.
+bool vk_timeline_recreate(gs_device *d, gs_timeline *t)
+{
+#ifdef _WIN32
+	const VkExternalSemaphoreHandleTypeFlagBits ht = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+#else
+	const VkExternalSemaphoreHandleTypeFlagBits ht = (VkExternalSemaphoreHandleTypeFlagBits)0;
+#endif
+	if (t->imported) {
+		blog(LOG_WARNING,
+		     "[libobs-vulkan] device rebuild: imported timeline replaced by a local one at %llu; "
+		     "its owner must import it again",
+		     (unsigned long long)t->last_value);
+	}
+	t->exportable = timeline_handle_ok(d, ht, false);
+	t->imported = false;
+	t->sem = create_semaphore(d, t->last_value, t->exportable ? ht : 0);
+	return t->sem != VK_NULL_HANDLE;
 }
