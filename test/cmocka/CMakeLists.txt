@@ -408,6 +408,57 @@ if(ENABLE_VULKAN)
         SKIP_REGULAR_EXPRESSION "SKIPPED"
     )
   endif()
+
+  # GPU (texture) encoding through the shared frames: a real encoder module encodes a moving, numbered pattern and
+  # libavcodec decodes it back. Each test picks its GPU with VK_LOADER_DRIVERS_SELECT and skips without it.
+  if(OS_WINDOWS AND (TARGET knurbs-nvenc OR TARGET obs-ffmpeg))
+    find_package(FFmpeg 8.0 REQUIRED COMPONENTS avcodec avutil)
+    add_executable(test_vulkan_gpu_encode test_vulkan_gpu_encode.cpp)
+    target_include_directories(test_vulkan_gpu_encode PRIVATE ${CMOCKA_INCLUDE_DIR})
+    target_compile_definitions(test_vulkan_gpu_encode PRIVATE OBS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_compile_features(test_vulkan_gpu_encode PRIVATE cxx_std_17)
+    target_link_libraries(test_vulkan_gpu_encode PRIVATE OBS::libobs FFmpeg::avcodec FFmpeg::avutil cmocka::cmocka)
+    add_dependencies(test_vulkan_gpu_encode libobs-vulkan)
+    set(_gpu_encode_tests)
+    # The encoders look for their capability probes (knurbs-nvenc-test, obs-amf-test) next to the executable.
+    macro(_gpu_encode_probe probe)
+      if(TARGET ${probe})
+        add_dependencies(test_vulkan_gpu_encode ${probe})
+        add_custom_command(
+          TARGET test_vulkan_gpu_encode
+          POST_BUILD
+          COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:${probe}>"
+                  "$<TARGET_FILE_DIR:test_vulkan_gpu_encode>"
+        )
+      endif()
+    endmacro()
+    macro(_gpu_encode_test name driver module id format)
+      add_test(
+        NAME test_vulkan_gpu_encode_${name}
+        COMMAND
+          test_vulkan_gpu_encode "$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan" "$<TARGET_FILE:${module}>" ${id}
+          ${format} ${ARGN}
+      )
+      set_tests_properties(test_vulkan_gpu_encode_${name} PROPERTIES ENVIRONMENT "VK_LOADER_DRIVERS_SELECT=${driver}")
+      list(APPEND _gpu_encode_tests test_vulkan_gpu_encode_${name})
+    endmacro()
+    if(TARGET knurbs-nvenc)
+      add_dependencies(test_vulkan_gpu_encode knurbs-nvenc)
+      _gpu_encode_probe(knurbs-nvenc-test)
+      set(_nv com.xaymar.knurbs.nvenc)
+      _gpu_encode_test(nvenc_h264 *nv-vk64* knurbs-nvenc ${_nv}.h264 nv12 rate_control=CQP cqp=20 bf=2)
+      _gpu_encode_test(nvenc_hevc_p010 *nv-vk64* knurbs-nvenc ${_nv}.hevc p010 rate_control=CQP cqp=20 bf=2)
+      # Lookahead holds many frames: the shared frame pool grows past its initial size.
+      _gpu_encode_test(nvenc_h264_lookahead *nv-vk64* knurbs-nvenc ${_nv}.h264 nv12 rate_control=CQP cqp=20 bf=3 lookahead=true)
+    endif()
+    set_tests_properties(
+      ${_gpu_encode_tests}
+      PROPERTIES
+        ENVIRONMENT_MODIFICATION
+          "OBS_VULKAN_VALIDATION=set:1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=set:true"
+        SKIP_REGULAR_EXPRESSION "SKIPPED"
+    )
+  endif()
 endif()
 
 # OS path test
