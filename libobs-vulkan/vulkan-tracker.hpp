@@ -27,9 +27,21 @@ public:
 	void forget(VkImage image);
 	void forget(VkBuffer buffer);
 
+	// External resources (imported, or exportable) are shared with another API, device or process. Between
+	// submissions they belong to VK_QUEUE_FAMILY_EXTERNAL in VK_IMAGE_LAYOUT_GENERAL: the first use in a submission
+	// acquires them from there (keeping the contents), release_external hands every acquired one back.
+	// `layout` is the layout the image is in when registered (GENERAL for imports).
+	void set_external(VkImage image, VkImageAspectFlags aspect, VkImageLayout layout);
+	void set_external(VkBuffer buffer);
+	// Records the release of every external resource acquired since the last call; the submission must follow.
+	void release_external(uint32_t family, vk_barriers &out);
+	// After a failed submission: forgets all state (layouts restart at UNDEFINED) except that external resources
+	// stay external and released, in GENERAL.
+	void reset();
+
 private:
-	// shortcut: images are tracked whole (every aspect the access names, all mips/layers); no queue family
-	// ownership transfers.
+	// shortcut: images are tracked whole (every aspect the access names, all mips/layers). The only queue family
+	// ownership transfers are those of external resources.
 	struct state {
 		VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 		VkPipelineStageFlags2 write_stage = 0; // source of the last write not yet superseded
@@ -37,6 +49,9 @@ private:
 		VkPipelineStageFlags2 visible_stage = 0; // scope already covered by an emitted barrier
 		VkAccessFlags2 visible_access = 0;
 		VkPipelineStageFlags2 read_stage = 0; // readers since the last write, a later write waits for them
+		bool external = false;                // see set_external
+		bool owned = false;                   // external: acquired in the submission being recorded
+		VkImageAspectFlags aspect = 0;        // external images: aspect of their barriers
 	};
 	struct source {
 		VkPipelineStageFlags2 stage;
@@ -45,7 +60,10 @@ private:
 	};
 	// Updates `s` for `needed`; returns true and the barrier source when a barrier is required.
 	static bool step(state &s, const vk_access &needed, bool check_layout, source &src);
+	// Acquire of an external resource that is not owned: replaces step() for that use.
+	static void acquire(state &s, const vk_access &needed, source &src);
 
 	std::unordered_map<uint64_t, state> images_;
 	std::unordered_map<uint64_t, state> buffers_;
+	std::vector<uint64_t> acquired_images_, acquired_buffers_;
 };

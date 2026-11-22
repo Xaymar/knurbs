@@ -20,6 +20,12 @@ struct vk_queue {
 	VkQueueGlobalPriorityKHR create_info_priority = (VkQueueGlobalPriorityKHR)0;
 };
 
+// Extra synchronisation for one submission (interop: imported or exported timelines, keyed mutexes).
+struct vk_submit_extra {
+	std::vector<VkSemaphoreSubmitInfo> waits, signals;
+	const void *pnext = nullptr; // chained to VkSubmitInfo2 (VkWin32KeyedMutexAcquireReleaseInfoKHR)
+};
+
 // One host-visible, persistently mapped block of a frame's upload arena.
 struct vk_arena_chunk {
 	VkBuffer buffer = VK_NULL_HANDLE;
@@ -63,10 +69,13 @@ struct vk_frame_ring {
 
 	// Waits only if the slot's previous submission is still in flight; returns it with `cmd` recording.
 	vk_frame &begin();
-	// Ends and submits the current frame on q (same family as init). wait/signal are optional binary semaphores.
-	// On failure the queue is drained, the timeline value is signalled from the host and added to q.failed_values,
-	// then the frame's deferred work runs.
-	bool submit(vk_queue &q, VkSemaphore *wait, VkSemaphore *signal);
+	// Ends and submits the current frame on q (same family as init). wait/signal are optional binary semaphores,
+	// extra adds timeline waits and signals and a pNext chain. On failure the queue is drained, the timeline value
+	// (and extra's timeline signals) are signalled from the host so no waiter hangs, the value is added to
+	// q.failed_values, then the frame's deferred work runs. `result` (optional) receives vkQueueSubmit2's result;
+	// a success code other than VK_SUCCESS (VK_TIMEOUT of a keyed mutex acquire) counts as submitted.
+	bool submit(vk_queue &q, VkSemaphore *wait, VkSemaphore *signal, const vk_submit_extra *extra = nullptr,
+		    VkResult *result = nullptr);
 	// Runs fn once every submission so far, and the frame being recorded, has finished on the GPU.
 	void defer_destroy(std::function<void()> fn);
 };

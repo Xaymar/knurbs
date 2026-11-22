@@ -115,9 +115,13 @@ void vk_frame_ring::defer_destroy(std::function<void()> fn)
 	}
 }
 
-bool vk_frame_ring::submit(vk_queue &q, VkSemaphore *wait, VkSemaphore *signal)
+bool vk_frame_ring::submit(vk_queue &q, VkSemaphore *wait, VkSemaphore *signal, const vk_submit_extra *extra,
+			   VkResult *result)
 {
 	vk_frame &f = frames[index];
+	if (result) {
+		*result = VK_ERROR_UNKNOWN;
+	}
 	if (!recording) {
 		blog(LOG_ERROR, "[libobs-vulkan] submit() without begin()");
 		return false;
@@ -127,44 +131,66 @@ bool vk_frame_ring::submit(vk_queue &q, VkSemaphore *wait, VkSemaphore *signal)
 
 	const uint64_t value = q.next_value;
 
-	VkSemaphoreSubmitInfo waits[1] = {{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}};
-	VkSemaphoreSubmitInfo signals[2] = {{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO},
-					    {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}};
-	uint32_t nsignal = 0;
-
-	signals[nsignal].semaphore = q.timeline;
-	signals[nsignal].value = value;
-	signals[nsignal++].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+	std::vector<VkSemaphoreSubmitInfo> waits, signals;
+	VkSemaphoreSubmitInfo s = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+	s.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+	s.semaphore = q.timeline;
+	s.value = value;
+	signals.push_back(s);
 	if (signal) {
-		signals[nsignal].semaphore = *signal;
-		signals[nsignal++].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+		s.semaphore = *signal;
+		s.value = 0;
+		signals.push_back(s);
 	}
 	if (wait) {
-		waits[0].semaphore = *wait;
-		waits[0].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+		s.semaphore = *wait;
+		s.value = 0;
+		waits.push_back(s);
+	}
+	if (extra) {
+		waits.insert(waits.end(), extra->waits.begin(), extra->waits.end());
+		signals.insert(signals.end(), extra->signals.begin(), extra->signals.end());
 	}
 
 	VkCommandBufferSubmitInfo ci = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
 	ci.commandBuffer = f.cmd;
 
 	VkSubmitInfo2 si = {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-	si.waitSemaphoreInfoCount = wait ? 1 : 0;
-	si.pWaitSemaphoreInfos = waits;
+	si.pNext = extra ? extra->pnext : nullptr;
+	si.waitSemaphoreInfoCount = (uint32_t)waits.size();
+	si.pWaitSemaphoreInfos = waits.data();
 	si.commandBufferInfoCount = 1;
 	si.pCommandBufferInfos = &ci;
-	si.signalSemaphoreInfoCount = nsignal;
-	si.pSignalSemaphoreInfos = signals;
+	si.signalSemaphoreInfoCount = (uint32_t)signals.size();
+	si.pSignalSemaphoreInfos = signals.data();
 
 	VkResult res = test_fail_submit ? VK_ERROR_OUT_OF_HOST_MEMORY : vkQueueSubmit2(q.q, 1, &si, VK_NULL_HANDLE);
-	if (res != VK_SUCCESS) {
+	if (result) {
+		*result = res;
+	}
+	// VK_TIMEOUT (a keyed mutex acquire that timed out) is a success code: the batch was submitted and signals.
+	if (res < VK_SUCCESS) {
 		blog(LOG_ERROR, "[libobs-vulkan] vkQueueSubmit2 failed (%d)", (int)res);
 		// Resources deferred here may still be used by earlier submissions; the slot itself has none in flight.
 		vkQueueWaitIdle(q.q);
-		// Signal the value from the host so no waiter hangs, and record that its work never ran.
-		VkSemaphoreSignalInfo sig = {VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-		sig.semaphore = q.timeline;
-		sig.value = value;
-		vkSignalSemaphore(dev, &sig);
+		// Signal the value (and the caller's timeline signals) from the host so no waiter hangs, and record that
+		// its work never ran.
+		// Only where the value was not reached (a failed submission may still have signalled some).
+		auto signal_host = [this](VkSemaphore sem, uint64_t v) {
+			uint64_t cur = 0;
+			if (vkGetSemaphoreCounterValue(dev, sem, &cur) == VK_SUCCESS && cur < v) {
+				VkSemaphoreSignalInfo sig = {VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+				sig.semaphore = sem;
+				sig.value = v;
+				vkSignalSemaphore(dev, &sig);
+			}
+		};
+		signal_host(q.timeline, value);
+		if (extra) {
+			for (const VkSemaphoreSubmitInfo &e : extra->signals) {
+				signal_host(e.semaphore, e.value);
+			}
+		}
 		q.next_value = value + 1;
 		q.failed_values.push_back(value);
 		run_deferred(f);
