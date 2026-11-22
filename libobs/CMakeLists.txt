@@ -194,6 +194,7 @@ target_sources(
     graphics/graphics-ffmpeg.c
     graphics/graphics-imports.c
     graphics/graphics-internal.h
+    graphics/graphics-vulkan.h
     graphics/graphics.c
     graphics/graphics.h
     graphics/half.h
@@ -294,6 +295,7 @@ set(
   graphics/bounds.h
   graphics/effect-parser.h
   graphics/effect.h
+  graphics/graphics-vulkan.h
   graphics/graphics.h
   graphics/image-file.h
   graphics/input.h
