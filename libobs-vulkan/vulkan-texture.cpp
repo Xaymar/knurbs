@@ -166,18 +166,27 @@ static void generate_mips(gs_device *d, gs_texture *tex)
 	}
 }
 
-static void destroy_texture_objects(gs_device *d, const gs_texture *tex)
+// A plane view whose peer still exists destroys only its own views; the peer now owns the image alone.
+static void destroy_texture_objects(gs_device *d, gs_texture *tex)
 {
-	d->tracker.forget(tex->image);
+	const bool shared = tex->plane_peer != nullptr;
+	if (shared) {
+		tex->plane_peer->plane_peer = nullptr;
+		tex->plane_peer = nullptr;
+	} else {
+		d->tracker.forget(tex->image);
+	}
 	if (tex->map_ptr) { // mapped, never unmapped: arena space, nothing to free; the slot may reuse it again
 		--d->frames.frames[tex->map_slot].maps;
 	}
-	d->frames.defer_destroy([dev = d->dev, vma = d->vma, t = *tex] {
+	d->frames.defer_destroy([dev = d->dev, vma = d->vma, t = *tex, shared] {
 		vkDestroyImageView(dev, t.view, nullptr);
 		vkDestroyImageView(dev, t.srgb_view, nullptr);
 		vkDestroyImageView(dev, t.rt_view, nullptr);
 		vkDestroyImageView(dev, t.rt_srgb_view, nullptr);
-		vmaDestroyImage(vma, t.image, t.alloc);
+		if (!shared) {
+			vmaDestroyImage(vma, t.image, t.alloc);
+		}
 	});
 }
 
@@ -304,7 +313,228 @@ static gs_texture *create_texture(gs_device *device, enum gs_texture_type type, 
 	return tex;
 }
 
+/* ---- NV12 / P010 ------------------------------------------------------------------------------------------------ */
+
+// One non-disjoint two-plane image (DISJOINT is not relied on: AMD does not offer it) with MUTABLE_FORMAT and
+// EXTENDED_USAGE, so its planes can be viewed as R8/RG8 (R16/RG16) and those views used as colour attachments, which
+// the multi-planar format itself never supports. No sampler Y'CbCr conversion: libobs samples and renders the planes
+// separately, as with D3D11's two views of one NV12 texture.
+struct vk_planar_format {
+	VkFormat image, y, uv;
+	enum gs_color_format gs_y, gs_uv;
+	uint32_t bpp_y; // bytes per Y texel; a UV texel is twice that
+};
+
+static const vk_planar_format nv12_format = {
+	VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8_UNORM, GS_R8, GS_R8G8, 1};
+// 10 bits in the high bits of each 16-bit word, as DXGI_FORMAT_P010.
+static const vk_planar_format p010_format = {VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
+					     VK_FORMAT_R16_UNORM,
+					     VK_FORMAT_R16G16_UNORM,
+					     GS_R16,
+					     GS_RG16,
+					     2};
+
+static const vk_planar_format &planar_format(bool p010)
+{
+	return p010 ? p010_format : nv12_format;
+}
+
+static VkImageUsageFlags planar_usage(bool rt)
+{
+	return VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+	       (rt ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0);
+}
+
+// The multi-planar format can be sampled and copied, both plane formats can be sampled, rendered to and copied,
+// and an image of `width` x `height` (0: any size) with every usage exists.
+static bool planar_supported(gs_device *d, const vk_planar_format &f, uint32_t width, uint32_t height)
+{
+	const VkFormatFeatureFlags image_need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+						VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+	const VkFormatFeatureFlags plane_need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+						VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+						VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+	VkFormatProperties fp;
+	vkGetPhysicalDeviceFormatProperties(d->phys, f.image, &fp);
+	if ((fp.optimalTilingFeatures & image_need) != image_need) {
+		return false;
+	}
+	for (VkFormat plane : {f.y, f.uv}) {
+		vkGetPhysicalDeviceFormatProperties(d->phys, plane, &fp);
+		if ((fp.optimalTilingFeatures & plane_need) != plane_need) {
+			return false;
+		}
+	}
+	VkPhysicalDeviceImageFormatInfo2 info = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2};
+	info.format = f.image;
+	info.type = VK_IMAGE_TYPE_2D;
+	info.tiling = VK_IMAGE_TILING_OPTIMAL;
+	info.usage = planar_usage(true);
+	info.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+	VkImageFormatProperties2 props = {VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
+	return vkGetPhysicalDeviceImageFormatProperties2(d->phys, &info, &props) == VK_SUCCESS &&
+	       width <= props.imageFormatProperties.maxExtent.width &&
+	       height <= props.imageFormatProperties.maxExtent.height;
+}
+
+static VkImageView create_plane_view(gs_device *d, VkImage image, VkFormat fmt, VkImageAspectFlags aspect)
+{
+	VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+	vi.image = image;
+	vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	vi.format = fmt;
+	vi.subresourceRange = {aspect, 0, 1, 0, 1};
+	VkImageView view = VK_NULL_HANDLE;
+	vkCreateImageView(d->dev, &vi, nullptr, &view);
+	return view;
+}
+
+// The plane view gs_texture of `image`; null when a view cannot be created (the image is not freed).
+static gs_texture *create_plane_texture(gs_device *d, VkImage image, VmaAllocation alloc, const vk_planar_format &f,
+					bool uv, uint32_t width, uint32_t height, bool rt)
+{
+	auto t = new gs_texture{d};
+	t->image = image;
+	t->alloc = alloc;
+	t->width = uv ? width / 2 : width;
+	t->height = uv ? height / 2 : height;
+	t->levels = 1;
+	t->format = uv ? f.gs_uv : f.gs_y;
+	t->aspect = uv ? VK_IMAGE_ASPECT_PLANE_1_BIT : VK_IMAGE_ASPECT_PLANE_0_BIT;
+	t->image_format = f.image;
+	const VkFormat fmt = uv ? f.uv : f.y;
+	t->view = create_plane_view(d, image, fmt, t->aspect);
+	bool ok = t->view != VK_NULL_HANDLE;
+	if (rt) {
+		t->rt_format = fmt;
+		t->rt_view = create_plane_view(d, image, fmt, t->aspect);
+		ok = ok && t->rt_view;
+	}
+	if (!ok) {
+		vkDestroyImageView(d->dev, t->view, nullptr); // never used by a command
+		vkDestroyImageView(d->dev, t->rt_view, nullptr);
+		delete t;
+		return nullptr;
+	}
+	return t;
+}
+
+// GS_SHARED_KM_TEX (which libobs passes for the encoder textures) has no meaning here and is ignored, as D3D11's
+// keyed mutex is not used by the Vulkan encoders.
+static bool create_planar(gs_device *d, gs_texture **tex_y, gs_texture **tex_uv, uint32_t width, uint32_t height,
+			  uint32_t flags, bool p010)
+{
+	*tex_y = *tex_uv = nullptr;
+	const vk_planar_format &f = planar_format(p010);
+	const char *fn = p010 ? "device_texture_create_p010" : "device_texture_create_nv12";
+	if (!width || !height || (width & 1) || (height & 1) || !planar_supported(d, f, width, height)) {
+		blog(LOG_ERROR, "[libobs-vulkan] %s: unsupported for %ux%u", fn, width, height);
+		return false;
+	}
+	const bool rt = (flags & GS_RENDER_TARGET) != 0;
+
+	const VkFormat view_formats[] = {f.y, f.uv};
+	VkImageFormatListCreateInfo fl = {VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO};
+	fl.viewFormatCount = 2;
+	fl.pViewFormats = view_formats;
+	VkImageCreateInfo ii = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &fl};
+	ii.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+	ii.imageType = VK_IMAGE_TYPE_2D;
+	ii.format = f.image;
+	ii.extent = {width, height, 1};
+	ii.mipLevels = 1;
+	ii.arrayLayers = 1;
+	ii.samples = VK_SAMPLE_COUNT_1_BIT;
+	ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+	ii.usage = planar_usage(rt);
+	ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	VmaAllocationCreateInfo ai = {};
+	ai.usage = VMA_MEMORY_USAGE_AUTO;
+
+	VkImage image;
+	VmaAllocation alloc;
+	if (vmaCreateImage(d->vma, &ii, &ai, &image, &alloc, nullptr) != VK_SUCCESS) {
+		blog(LOG_ERROR, "[libobs-vulkan] %s: vmaCreateImage failed", fn);
+		return false;
+	}
+	gs_texture *y = create_plane_texture(d, image, alloc, f, false, width, height, rt);
+	gs_texture *uv = y ? create_plane_texture(d, image, alloc, f, true, width, height, rt) : nullptr;
+	if (!uv) {
+		blog(LOG_ERROR, "[libobs-vulkan] %s: plane view creation failed", fn);
+		if (y) {
+			vkDestroyImageView(d->dev, y->view, nullptr);
+			vkDestroyImageView(d->dev, y->rt_view, nullptr);
+			delete y;
+		}
+		vmaDestroyImage(d->vma, image, alloc); // never used by a command
+		return false;
+	}
+	y->plane_peer = uv;
+	uv->plane_peer = y;
+	*tex_y = y;
+	*tex_uv = uv;
+	return true;
+}
+
+static gs_stage_surface *create_planar_stagesurface(gs_device *d, uint32_t width, uint32_t height, bool p010)
+{
+	const vk_planar_format &f = planar_format(p010);
+	if (!width || !height || (width & 1) || (height & 1)) {
+		blog(LOG_ERROR, "[libobs-vulkan] device_stagesurface_create_%s: unsupported for %ux%u",
+		     p010 ? "p010" : "nv12", width, height);
+		return nullptr;
+	}
+	auto s = new gs_stage_surface{d};
+	s->width = width;
+	s->height = height;
+	s->format = GS_UNKNOWN;
+	s->planar = f.image;
+	s->linesize = width * f.bpp_y; // the UV plane's rows: width / 2 texels of 2 * bpp_y bytes
+	const VkDeviceSize size = (VkDeviceSize)s->linesize * height * 3 / 2;
+	if (!vk_create_host_buffer(d, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				   VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT, s->buffer, s->alloc, s->mapped)) {
+		blog(LOG_ERROR, "[libobs-vulkan] device_stagesurface_create_%s: vmaCreateBuffer failed",
+		     p010 ? "p010" : "nv12");
+		delete s;
+		return nullptr;
+	}
+	return s;
+}
+
 extern "C" {
+
+EXPORT bool device_nv12_available(gs_device_t *device)
+{
+	return planar_supported(device, nv12_format, 0, 0);
+}
+
+EXPORT bool device_p010_available(gs_device_t *device)
+{
+	return planar_supported(device, p010_format, 0, 0);
+}
+
+EXPORT bool device_texture_create_nv12(gs_device_t *device, gs_texture_t **tex_y, gs_texture_t **tex_uv, uint32_t width,
+				       uint32_t height, uint32_t flags)
+{
+	return create_planar(device, tex_y, tex_uv, width, height, flags, false);
+}
+
+EXPORT bool device_texture_create_p010(gs_device_t *device, gs_texture_t **tex_y, gs_texture_t **tex_uv, uint32_t width,
+				       uint32_t height, uint32_t flags)
+{
+	return create_planar(device, tex_y, tex_uv, width, height, flags, true);
+}
+
+EXPORT gs_stagesurf_t *device_stagesurface_create_nv12(gs_device_t *device, uint32_t width, uint32_t height)
+{
+	return create_planar_stagesurface(device, width, height, false);
+}
+
+EXPORT gs_stagesurf_t *device_stagesurface_create_p010(gs_device_t *device, uint32_t width, uint32_t height)
+{
+	return create_planar_stagesurface(device, width, height, true);
+}
 
 EXPORT gs_texture_t *device_texture_create(gs_device_t *device, uint32_t width, uint32_t height,
 					   enum gs_color_format color_format, uint32_t levels, const uint8_t **data,

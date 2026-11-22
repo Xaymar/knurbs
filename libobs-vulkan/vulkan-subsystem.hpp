@@ -166,7 +166,20 @@ struct gs_texture {
 	vk_buffer map_buf;
 	VmaAllocation map_alloc = VK_NULL_HANDLE;
 	uint32_t map_slot = 0;
+	// Two-plane (NV12/P010) textures: device_texture_create_nv12/_p010 make one multi-planar image and two
+	// gs_textures that are views of its planes (Y: GS_R8/GS_R16 at full size, UV: GS_R8G8/GS_RG16 at half size),
+	// as D3D11's two views of one NV12 texture. Both share `image`/`alloc`; the last one destroyed frees them.
+	// Copies and staging address the plane with `aspect`; barriers (the tracker) cover the whole image.
+	VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT; // PLANE_0 (Y) or PLANE_1 (UV) for plane views
+	VkFormat image_format = VK_FORMAT_UNDEFINED;           // plane views: the multi-planar format of `image`
+	gs_texture *plane_peer = nullptr;                      // the other plane's view while it exists
 };
+
+// True for a plane view of a two-plane image.
+inline bool vk_is_plane(const gs_texture *t)
+{
+	return t->image_format != VK_FORMAT_UNDEFINED;
+}
 
 // Depth/stencil buffer: one image and one attachment view, never sampled (as D3D11's DSV-only texture).
 struct gs_zstencil_buffer {
@@ -185,7 +198,10 @@ struct gs_stage_surface {
 	VmaAllocation alloc = VK_NULL_HANDLE;
 	void *mapped = nullptr; // persistently mapped
 	uint32_t width, height, linesize;
-	gs_color_format format;
+	gs_color_format format; // GS_UNKNOWN for NV12/P010 surfaces, as D3D11
+	// NV12/P010 surfaces (device_stagesurface_create_nv12/_p010): the multi-planar format whose Y plane view is
+	// staged into it; the UV plane follows the Y plane's `height` rows at the same linesize, as D3D11's mapping.
+	VkFormat planar = VK_FORMAT_UNDEFINED;
 	uint64_t copy_value = 0; // graphics timeline value of the submission holding the last copy; 0: never staged
 };
 
@@ -293,6 +309,11 @@ VkCommandBuffer vk_cmd(gs_device *d);
 VkCommandBuffer vk_frame_cmd(gs_device *d);
 // Ends the open dynamic rendering instance, if any.
 void vk_end_rendering(gs_device *d);
+// Begins a dynamic rendering instance into `view` of `rt` (and `zs`'s depth view, if given) unless that one is open
+// and `b` is empty. Ends any other instance first, registers the attachments with the tracker and records `b` and
+// the tracker's barriers. Returns the frame's command buffer.
+VkCommandBuffer vk_begin_rendering(gs_device *d, gs_texture *rt, VkImageView view, gs_zstencil_buffer *zs,
+				   vk_barriers &b);
 // Copies `data` into the recording frame's upload arena (begins a frame if none is); buf.buffer/offset point at it.
 // A full arena grows by a new chunk; never waits. False when out of memory.
 bool vk_arena_upload(gs_device *d, const void *data, VkDeviceSize size, VkDeviceSize align, vk_buffer &buf);

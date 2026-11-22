@@ -619,6 +619,57 @@ static VkPrimitiveTopology topology(enum gs_draw_mode mode)
 	}
 }
 
+VkCommandBuffer vk_begin_rendering(gs_device *d, gs_texture *rt, VkImageView view, gs_zstencil_buffer *zs,
+				   vk_barriers &b)
+{
+	VkCommandBuffer cmd = vk_frame_cmd(d);
+	const VkImageView zview = zs ? zs->view : VK_NULL_HANDLE;
+	if (b.images.empty() && d->rendering_view == view && d->rendering_depth == zview) {
+		return cmd;
+	}
+	vk_end_rendering(d);
+	// Plane views: the barrier covers the whole two-plane image (COLOR aspect, as a non-disjoint image needs).
+	d->tracker.use_image(rt->image, d->graphics.family,
+			     {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+			      VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+			      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+			     b);
+	if (zs) {
+		d->tracker.use_image(
+			zs->image, d->graphics.family,
+			{VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+			 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+			 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, zs->aspect},
+			b);
+	}
+	vk_record_barriers(cmd, b);
+
+	VkRenderingAttachmentInfo ca = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+	ca.imageView = view;
+	ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	// device_clear is a transfer clear before the instance, or vkCmdClearAttachments inside it for plane views.
+	ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+	ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	VkRenderingInfo ri = {VK_STRUCTURE_TYPE_RENDERING_INFO};
+	ri.renderArea = {{0, 0}, {rt->width, rt->height}};
+	ri.layerCount = 1;
+	ri.colorAttachmentCount = 1;
+	ri.pColorAttachments = &ca;
+	VkRenderingAttachmentInfo da = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+	if (zs) {
+		da.imageView = zview;
+		da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+		da.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+		da.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		ri.pDepthAttachment = &da;
+		ri.pStencilAttachment = has_stencil(zs->format) ? &da : nullptr;
+	}
+	vkCmdBeginRendering(cmd, &ri);
+	d->rendering_view = view;
+	d->rendering_depth = zview;
+	return cmd;
+}
+
 // Never waits on the GPU: everything it needs comes from the frame's arena and descriptor pools.
 static void draw(gs_device *d, enum gs_draw_mode mode, uint32_t start, uint32_t count)
 {
@@ -732,49 +783,7 @@ static void draw(gs_device *d, enum gs_draw_mode mode, uint32_t start, uint32_t 
 		return;
 	}
 
-	VkCommandBuffer cmd = vk_frame_cmd(d);
-	const VkImageView zview = zs ? zs->view : VK_NULL_HANDLE;
-	if (!b.images.empty() || d->rendering_view != view || d->rendering_depth != zview) {
-		vk_end_rendering(d);
-		d->tracker.use_image(rt->image, d->graphics.family,
-				     {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-				      VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-				      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
-				     b);
-		if (zs) {
-			d->tracker.use_image(zs->image, d->graphics.family,
-					     {VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-						      VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-					      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-						      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-					      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, zs->aspect},
-					     b);
-		}
-		vk_record_barriers(cmd, b);
-
-		VkRenderingAttachmentInfo ca = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-		ca.imageView = view;
-		ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // device_clear is a transfer clear before the instance
-		ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		VkRenderingInfo ri = {VK_STRUCTURE_TYPE_RENDERING_INFO};
-		ri.renderArea = {{0, 0}, {rt->width, rt->height}};
-		ri.layerCount = 1;
-		ri.colorAttachmentCount = 1;
-		ri.pColorAttachments = &ca;
-		VkRenderingAttachmentInfo da = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-		if (zs) {
-			da.imageView = zview;
-			da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-			da.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-			da.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-			ri.pDepthAttachment = &da;
-			ri.pStencilAttachment = has_stencil(zs->format) ? &da : nullptr;
-		}
-		vkCmdBeginRendering(cmd, &ri);
-		d->rendering_view = view;
-		d->rendering_depth = zview;
-	}
+	VkCommandBuffer cmd = vk_begin_rendering(d, rt, view, zs, b);
 
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 	// Negative height (Vulkan 1.1 core): clip-space +Y is up as in D3D, so D3D's projection matrices apply as-is.

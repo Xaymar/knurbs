@@ -191,9 +191,34 @@ static enum gs_color_format copy_format(enum gs_color_format f)
 	return f == GS_RGBA_UNORM ? GS_RGBA : f == GS_BGRX_UNORM ? GS_BGRX : f == GS_BGRA_UNORM ? GS_BGRA : f;
 }
 
+// Size of the Y plane of the two-plane image `t` is a plane view of.
+static void luma_size(const gs_texture *t, uint32_t &w, uint32_t &h)
+{
+	const bool uv = t->aspect == VK_IMAGE_ASPECT_PLANE_1_BIT;
+	w = uv ? t->width * 2 : t->width;
+	h = uv ? t->height * 2 : t->height;
+}
+
+// Both planes of the two-plane image `t` is a plane view of: the Y plane, then the UV plane.
+static void plane_extents(const gs_texture *t, VkExtent3D out[2])
+{
+	uint32_t w, h;
+	luma_size(t, w, h);
+	out[0] = {w, h, 1};
+	out[1] = {w / 2, h / 2, 1};
+}
+
 // As D3D11: 2D textures of the same copy format (see copy_format); src_w/src_h 0 mean
 // "to the source's edge". shortcut: mip 0 only (D3D11's whole-texture copy copies every level; OBS copies
 // single-level textures).
+//
+// Plane views (NV12/P010) copy as D3D11's views of one NV12 texture do: a whole-texture copy (device_copy_texture,
+// or every offset and size 0) between plane views of two images of the same two-plane format copies both planes,
+// whichever plane the views are (CopyResource copies the underlying texture). libobs relies on it on Windows, where
+// queue_frame (obs-video.c) copies only the Y texture of an encoder frame. Elsewhere it copies the UV texture too,
+// which then copies that plane again: correct, at the cost of one extra chroma copy on that (duplicate frame) path.
+// Any other copy involving a plane view copies only that plane (CopySubresourceRegion of subresource 0, and a plane
+// to or from an ordinary R8/RG8 (R16/RG16) texture).
 EXPORT void device_copy_texture_region(gs_device_t *device, gs_texture_t *dst, uint32_t dst_x, uint32_t dst_y,
 				       gs_texture_t *src, uint32_t src_x, uint32_t src_y, uint32_t src_w,
 				       uint32_t src_h)
@@ -225,8 +250,24 @@ EXPORT void device_copy_texture_region(gs_device_t *device, gs_texture_t *dst, u
 				   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL},
 				  b);
 	vk_record_barriers(cmd, b);
+	const bool whole = !dst_x && !dst_y && !src_x && !src_y && !src_w && !src_h;
+	if (whole && vk_is_plane(src) && vk_is_plane(dst) && src->image_format == dst->image_format) {
+		// Same formats and sizes (checked above), so the same plane of images of the same size.
+		VkImageCopy regions[2] = {};
+		VkExtent3D ext[2];
+		plane_extents(src, ext);
+		for (int i = 0; i < 2; ++i) {
+			const VkImageAspectFlags plane = i ? VK_IMAGE_ASPECT_PLANE_1_BIT : VK_IMAGE_ASPECT_PLANE_0_BIT;
+			regions[i].srcSubresource = regions[i].dstSubresource = {plane, 0, 0, 1};
+			regions[i].extent = ext[i];
+		}
+		vkCmdCopyImage(cmd, src->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst->image,
+			       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, regions);
+		return;
+	}
 	VkImageCopy region = {};
-	region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	region.srcSubresource = {src->aspect, 0, 0, 1};
+	region.dstSubresource = {dst->aspect, 0, 0, 1};
 	region.srcOffset = {(int32_t)src_x, (int32_t)src_y, 0};
 	region.dstOffset = {(int32_t)dst_x, (int32_t)dst_y, 0};
 	region.extent = {w, h, 1};
@@ -239,10 +280,17 @@ EXPORT void device_copy_texture(gs_device_t *device, gs_texture_t *dst, gs_textu
 	device_copy_texture_region(device, dst, 0, 0, src, 0, 0, 0, 0);
 }
 
+// Staging into an NV12/P010 surface (device_stagesurface_create_nv12/_p010) takes the Y plane view of a two-plane
+// image of the same format and size and copies both planes, as D3D11's CopyResource into its NV12 staging texture:
+// the Y rows, then the UV rows right after them at the same linesize. A plane view staged into an ordinary surface of
+// its own format and size copies only that plane.
 EXPORT void obs_vulkan_test_stage_mip(gs_device_t *device, gs_stagesurf_t *dst, gs_texture_t *src, uint32_t level)
 {
+	const bool planar = dst && dst->planar;
 	if (!dst || !src || level >= src->levels || dst->width != std::max(src->width >> level, 1u) ||
-	    dst->height != std::max(src->height >> level, 1u) || dst->format != src->format) {
+	    dst->height != std::max(src->height >> level, 1u) ||
+	    (planar ? src->image_format != dst->planar || src->aspect != VK_IMAGE_ASPECT_PLANE_0_BIT
+		    : dst->format != src->format)) {
 		blog(LOG_ERROR, "[libobs-vulkan] device_stage_texture: size or format mismatch");
 		return;
 	}
@@ -255,10 +303,20 @@ EXPORT void obs_vulkan_test_stage_mip(gs_device_t *device, gs_stagesurf_t *dst, 
 	device->tracker.use_buffer(dst->buffer, fam, {VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT}, b);
 	vk_record_barriers(cmd, b);
 
-	VkBufferImageCopy region = {};
-	region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
-	region.imageExtent = {dst->width, dst->height, 1};
-	vkCmdCopyImageToBuffer(cmd, src->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst->buffer, 1, &region);
+	VkBufferImageCopy regions[2] = {};
+	regions[0].imageSubresource = {src->aspect, level, 0, 1};
+	regions[0].imageExtent = {dst->width, dst->height, 1};
+	uint32_t n = 1;
+	if (planar) {
+		// Tightly packed rows of either plane are `linesize` bytes; the offset is a multiple of 4 (even sizes).
+		VkExtent3D ext[2];
+		plane_extents(src, ext);
+		regions[1].bufferOffset = (VkDeviceSize)dst->linesize * dst->height;
+		regions[1].imageSubresource = {VK_IMAGE_ASPECT_PLANE_1_BIT, 0, 0, 1};
+		regions[1].imageExtent = ext[1];
+		n = 2;
+	}
+	vkCmdCopyImageToBuffer(cmd, src->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst->buffer, n, regions);
 
 	// Makes the copy available to the host once the submission's timeline value signals.
 	vk_barriers host;
@@ -285,7 +343,16 @@ EXPORT void device_clear(gs_device_t *device, uint32_t clear_flags, const struct
 	const vk_access clear = {VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
 				 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL};
 	gs_texture *rt = device->render_target;
-	if ((clear_flags & GS_CLEAR_COLOR) && rt && rt->image && color) { // no image: swapchain not acquired
+	if ((clear_flags & GS_CLEAR_COLOR) && rt && rt->image && color && vk_is_plane(rt) && rt->rt_view) {
+		// vkCmdClearColorImage rejects formats that need a Y'CbCr conversion: clear the plane view as an
+		// attachment. Not a load op: on NVIDIA (Linux 580) a loadOp CLEAR of the Y plane view is dropped.
+		vk_barriers b;
+		VkCommandBuffer cmd = vk_begin_rendering(device, rt, rt->rt_view, nullptr, b);
+		VkClearAttachment ca = {VK_IMAGE_ASPECT_COLOR_BIT, 0, {{{color->x, color->y, color->z, color->w}}}};
+		VkClearRect rect = {{{0, 0}, {rt->width, rt->height}}, 0, 1};
+		vkCmdClearAttachments(cmd, 1, &ca, 1, &rect);
+	} else if ((clear_flags & GS_CLEAR_COLOR) && rt && rt->image && color && !vk_is_plane(rt)) {
+		// no image: swapchain not acquired
 		VkCommandBuffer cmd = vk_cmd(device);
 		vk_barriers b;
 		device->tracker.use_image(rt->image, device->graphics.family, clear, b);
