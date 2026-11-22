@@ -105,6 +105,37 @@ that wrote it, through one of:
 A new exportable texture or buffer is transitioned and released once at creation (with a short GPU wait). Its handle
 therefore never leaves the device before the resource is in the hand-off state.
 
+## Native objects (in-process only)
+
+`gs_get_device_obj()` and `gs_texture_get_obj()` return `struct gs_vulkan_device` and `struct gs_vulkan_texture`
+(`libobs/graphics/graphics-vulkan.h`) on the Vulkan renderer: instance, physical device, device, graphics queue and
+its family/index; image, views, format, aspect, last recorded layout and size. They exist for code that runs **in
+the OBS process** and wants to record Vulkan work against the renderer's own objects. They break the first design
+rule on purpose and therefore stay out of this API: nothing out of process may use them (the handles mean nothing
+there), and in-process code must not destroy them, may use the queue only with the graphics context entered, and
+must order its work with the renderer itself (`gs_flush()` plus its own semaphores, or better a `gs_timeline_t`).
+Code that may move to another process uses the exports above instead.
+
+## Device loss
+
+`gs_register_loss_callbacks` works as on D3D11: when the device is lost (any `VK_ERROR_DEVICE_LOST`), the next safe
+point (`gs_begin_frame`, `gs_is_present_ready`, the end of `gs_present`) calls every `device_loss_release`, recreates
+the instance, the device and every object in place, then calls every `device_loss_rebuild` with the new
+`struct gs_vulkan_device` (D3D11 passes its `ID3D11Device`). For this API that means:
+
+* **Exportable textures and frame buffers get new memory.** Handles exported before the loss are dead; export again
+  in `device_loss_rebuild` and hand the new handles over.
+* **Imported textures and timelines can't come back by themselves**, because an import borrows its handle. They
+  become placeholders (a texture of the same size and format, a local timeline at the last value seen); import
+  again from the producer's new handles. Legacy KMT handles (`gs_texture_open_shared`) are opened again, as D3D11
+  does, and stay placeholders if that fails.
+* Everything else (static textures with their data, buffers, shaders, samplers, depth buffers, stage surfaces,
+  swapchains, timers) keeps working without the caller doing anything. Render targets come back with undefined
+  contents.
+
+`OBS_VULKAN_TEST_DEVICE_LOST=N` makes the N-th submission report `VK_ERROR_DEVICE_LOST` (and every later one until
+the rebuild); `test_vulkan_loss` uses it.
+
 ## Windows: the existing exports
 
 * `gs_shared_texture_available()` is true when the last device created has `VK_KHR_external_memory_win32` and a
