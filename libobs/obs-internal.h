@@ -320,6 +320,28 @@ struct obs_vframe_info {
 	int count;
 };
 
+/* Vulkan texture encoding (obs-video-gpu-encode.c): an encoder's release timeline. Refcounted: the encoder and every
+ * frame it still holds keep a reference. Destroyed with the graphics context entered. */
+struct obs_gpu_release {
+	long refs; /* changed with gpu_encoder_mutex held */
+	gs_timeline_t *timeline;
+	struct gs_shared_handle handle;
+	volatile bool stopped; /* the encoder stopped: its holds no longer count */
+};
+
+/* A frame an encoder still reads until its release timeline reaches value. */
+struct obs_gpu_hold {
+	struct obs_gpu_release *release;
+	uint64_t value;
+};
+
+/* An exported encoder texture (its handle stays open while the frame pool exists). */
+struct obs_gpu_export {
+	gs_texture_t *tex;
+	struct gs_shared_texture_desc desc;
+	uint64_t id;
+};
+
 struct obs_tex_frame {
 	gs_texture_t *tex;
 	gs_texture_t *tex_uv;
@@ -328,6 +350,15 @@ struct obs_tex_frame {
 	uint64_t lock_key;
 	int count;
 	bool released;
+
+	/* Vulkan only (video->gpu_encode_shared) */
+	gs_sharedbuf_t *buf;
+	struct gs_shared_texture_desc buf_desc;
+	uint64_t buf_id;
+	struct gs_shared_texture_desc tex_desc; /* export of tex (which moves between frames), set when queued */
+	uint64_t tex_id;
+	uint64_t ready_value;
+	DARRAY(struct obs_gpu_hold) holds;
 };
 
 struct obs_task_info {
@@ -371,6 +402,16 @@ struct obs_core_video_mix {
 	pthread_t gpu_encode_thread;
 	bool gpu_encode_thread_initialized;
 	volatile bool gpu_encode_stop;
+
+	/* Vulkan texture encoding: frames go to encoders as OS handles (docs/graphics-interop.md) */
+	bool gpu_encode_shared;
+	size_t gpu_encode_frames;        /* frames in the pool; grows while encoders hold frames */
+	long gpu_encode_buffer_users;    /* active encoders with OBS_ENCODER_CAP_SHARED_BUFFER */
+	gs_timeline_t *gpu_encode_ready; /* signalled by the render thread for each queued frame */
+	struct gs_shared_handle gpu_encode_ready_handle;
+	uint64_t gpu_encode_ready_value;
+	uint64_t gpu_encode_next_id;
+	DARRAY(struct obs_gpu_export) gpu_encode_exports;
 
 	video_t *video;
 	struct obs_video_info ovi;
@@ -1419,6 +1460,8 @@ struct obs_encoder {
 	bool first_received;
 	/* set by the GPU encode thread when an encode failed, until the encoder stops */
 	volatile bool gpu_encode_failed;
+	/* Vulkan texture encoding with OBS_ENCODER_CAP_SHARED_HANDLES, while started */
+	struct obs_gpu_release *gpu_release;
 	DARRAY(obs_weak_encoder_t *) paired_encoders;
 	int64_t offset_usec;
 	uint64_t first_raw_ts;
@@ -1467,6 +1510,14 @@ extern void obs_encoder_remove_output(struct obs_encoder *encoder, struct obs_ou
 
 extern bool start_gpu_encode(obs_encoder_t *encoder);
 extern void stop_gpu_encode(obs_encoder_t *encoder);
+/* obs-video-gpu-encode.c; the graphics context must be entered */
+extern bool gpu_encode_create_textures(struct obs_core_video_mix *video, gs_texture_t **tex, gs_texture_t **tex_uv,
+				       uint32_t width, uint32_t height, bool p010);
+extern struct obs_gpu_release *gpu_encode_release_create(void);
+extern void gpu_encode_release_unref(struct obs_gpu_release *release);
+/* with gpu_encoder_mutex held, graphics entered */
+extern bool gpu_encode_pop_free_frame(struct obs_core_video_mix *video, struct obs_tex_frame *tf);
+extern void gpu_encode_prepare_frame(struct obs_core_video_mix *video, struct obs_tex_frame *tf);
 
 extern bool do_encode(struct obs_encoder *encoder, struct encoder_frame *frame, const uint64_t *frame_cts);
 extern void send_off_encoder_packet(obs_encoder_t *encoder, bool success, bool received, struct encoder_packet *pkt);

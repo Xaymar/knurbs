@@ -27,6 +27,187 @@ static void stop_failed_encoder(void *param)
 	obs_encoder_release(encoder);
 }
 
+/* ------------------------------------------------------------------------- */
+/* Vulkan: frames as OS handles (docs/graphics-interop.md, "Texture encoders") */
+
+/* Encoders may hold frames for their whole pipeline (NVENC: up to 64 with lookahead), so the pool grows instead of
+ * waiting for them; past this it duplicates the previous frame, as when every frame is queued. */
+#define MAX_SHARED_ENCODE_FRAMES 80
+
+static enum gs_handle_type native_handle_type(void)
+{
+#ifdef _WIN32
+	return GS_HANDLE_WIN32;
+#else
+	return GS_HANDLE_FD;
+#endif
+}
+
+bool gpu_encode_create_textures(struct obs_core_video_mix *video, gs_texture_t **tex, gs_texture_t **tex_uv,
+				uint32_t width, uint32_t height, bool p010)
+{
+	UNUSED_PARAMETER(video);
+	*tex = *tex_uv = NULL;
+	/* Vulkan has no D3D11 share handles; its encoder frames are exportable instead. */
+	if (gs_get_device_type() == GS_DEVICE_VULKAN &&
+	    gs_texture_create_exportable(width, height, GS_UNKNOWN, p010 ? GS_SHARED_P010 : GS_SHARED_NV12,
+					 GS_RENDER_TARGET, tex, tex_uv))
+		return true;
+	if (p010)
+		return gs_texture_create_p010(tex, tex_uv, width, height, GS_RENDER_TARGET | GS_SHARED_KM_TEX);
+	return gs_texture_create_nv12(tex, tex_uv, width, height, GS_RENDER_TARGET | GS_SHARED_KM_TEX);
+}
+
+void gpu_encode_release_unref(struct obs_gpu_release *release)
+{
+	if (release && --release->refs == 0) {
+		gs_shared_handle_close(&release->handle);
+		gs_timeline_destroy(release->timeline);
+		bfree(release);
+	}
+}
+
+struct obs_gpu_release *gpu_encode_release_create(void)
+{
+	struct obs_gpu_release *release = bzalloc(sizeof(*release));
+	release->refs = 1;
+	release->timeline = gs_timeline_create(0);
+	if (!release->timeline || !gs_timeline_export(release->timeline, native_handle_type(), &release->handle)) {
+		blog(LOG_ERROR, "GPU encode: cannot create an exportable release timeline");
+		gs_timeline_destroy(release->timeline);
+		bfree(release);
+		return NULL;
+	}
+	return release;
+}
+
+static bool gpu_encode_add_frame(struct obs_core_video_mix *video)
+{
+	const struct video_output_info *info = video_output_get_info(video->video);
+	struct obs_tex_frame frame = {0};
+
+	if (!gpu_encode_create_textures(video, &frame.tex, &frame.tex_uv, info->width, info->height,
+					info->format == VIDEO_FORMAT_P010) ||
+	    !frame.tex)
+		return false;
+
+#ifdef _WIN32
+	frame.handle = gs_texture_get_shared_handle(frame.tex);
+#else
+	frame.handle = (uint32_t)-1;
+#endif
+	deque_push_back(&video->gpu_encoder_avail_queue, &frame, sizeof(frame));
+	video->gpu_encode_frames++;
+	return true;
+}
+
+/* Drops the holds that are over; true when nothing reads the frame any more. */
+static bool gpu_frame_free(struct obs_tex_frame *tf)
+{
+	size_t kept = 0;
+	for (size_t i = 0; i < tf->holds.num; i++) {
+		struct obs_gpu_hold hold = tf->holds.array[i];
+		if (os_atomic_load_bool(&hold.release->stopped) ||
+		    gs_timeline_get_value(hold.release->timeline) >= hold.value)
+			gpu_encode_release_unref(hold.release);
+		else
+			tf->holds.array[kept++] = hold;
+	}
+	tf->holds.num = kept;
+	return kept == 0;
+}
+
+static void gpu_frame_free_resources(struct obs_tex_frame *tf)
+{
+	gs_texture_destroy(tf->tex);
+	gs_texture_destroy(tf->tex_uv);
+	if (tf->buf) {
+		struct gs_shared_handle h = {tf->buf_desc.type, tf->buf_desc.win32, tf->buf_desc.fds[0]};
+		gs_shared_handle_close(&h);
+		gs_sharedbuf_destroy(tf->buf);
+	}
+	for (size_t i = 0; i < tf->holds.num; i++)
+		gpu_encode_release_unref(tf->holds.array[i].release);
+	da_free(tf->holds);
+}
+
+bool gpu_encode_pop_free_frame(struct obs_core_video_mix *video, struct obs_tex_frame *tf)
+{
+	const size_t count = video->gpu_encoder_avail_queue.size / sizeof(*tf);
+
+	if (!video->gpu_encode_shared) {
+		if (!count)
+			return false;
+		deque_pop_front(&video->gpu_encoder_avail_queue, tf, sizeof(*tf));
+		return true;
+	}
+
+	for (size_t i = 0; i < count; i++) {
+		deque_pop_front(&video->gpu_encoder_avail_queue, tf, sizeof(*tf));
+		if (gpu_frame_free(tf))
+			return true;
+		deque_push_back(&video->gpu_encoder_avail_queue, tf, sizeof(*tf));
+	}
+
+	if (video->gpu_encode_frames < MAX_SHARED_ENCODE_FRAMES && gpu_encode_add_frame(video)) {
+		deque_pop_back(&video->gpu_encoder_avail_queue, tf, sizeof(*tf));
+		return true;
+	}
+	return false;
+}
+
+static void gpu_encode_export(struct obs_core_video_mix *video, gs_texture_t *tex, struct gs_shared_texture_desc *desc,
+			      uint64_t *id)
+{
+	for (size_t i = 0; i < video->gpu_encode_exports.num; i++) {
+		struct obs_gpu_export *e = &video->gpu_encode_exports.array[i];
+		if (e->tex == tex) {
+			*desc = e->desc;
+			*id = e->id;
+			return;
+		}
+	}
+
+	struct obs_gpu_export e = {.tex = tex};
+	if (!gs_texture_export(tex, native_handle_type(), &e.desc)) {
+		memset(desc, 0, sizeof(*desc));
+		*id = 0;
+		return;
+	}
+	e.id = ++video->gpu_encode_next_id;
+	da_push_back(video->gpu_encode_exports, &e);
+	*desc = e.desc;
+	*id = e.id;
+}
+
+void gpu_encode_prepare_frame(struct obs_core_video_mix *video, struct obs_tex_frame *tf)
+{
+	if (video->gpu_encode_buffer_users > 0) {
+		if (!tf->buf) {
+			const struct video_output_info *info = video_output_get_info(video->video);
+			tf->buf = gs_sharedbuf_create(info->width, info->height,
+						      info->format == VIDEO_FORMAT_P010 ? GS_SHARED_P010
+											: GS_SHARED_NV12);
+			if (tf->buf && gs_sharedbuf_export(tf->buf, native_handle_type(), &tf->buf_desc)) {
+				tf->buf_id = ++video->gpu_encode_next_id;
+			} else {
+				blog(LOG_ERROR, "GPU encode: cannot create an exportable frame buffer");
+				gs_sharedbuf_destroy(tf->buf);
+				tf->buf = NULL;
+			}
+		}
+		if (tf->buf)
+			gs_sharedbuf_copy_texture(tf->buf, tf->tex);
+	}
+
+	gpu_encode_export(video, tf->tex, &tf->tex_desc, &tf->tex_id);
+
+	tf->ready_value = ++video->gpu_encode_ready_value;
+	gs_timeline_signal(video->gpu_encode_ready, tf->ready_value);
+}
+
+/* ------------------------------------------------------------------------- */
+
 #define NBSP "\xC2\xA0"
 static const char *gpu_encode_frame_name = "gpu_encode_frame";
 static void *gpu_encode_thread(void *data)
@@ -68,6 +249,7 @@ static void *gpu_encode_thread(void *data)
 		pthread_mutex_lock(&video->gpu_encoder_mutex);
 
 		deque_pop_front(&video->gpu_encoder_queue, &tf, sizeof(tf));
+		const size_t tf_holds_before = tf.holds.num;
 		timestamp = tf.timestamp;
 		lock_key = tf.lock_key;
 		next_key = tf.lock_key;
@@ -163,6 +345,21 @@ static void *gpu_encode_thread(void *data)
 			 */
 			fer_ts = os_gettime_ns();
 
+			/* stop_gpu_encode clears gpu_release only once this thread is idle */
+			struct obs_gpu_release *release = encoder->gpu_release;
+			struct encoder_texture_shared shared = {0};
+			if (release) {
+				shared.tex_id = tf.tex_id;
+				shared.buf_id = tf.buf ? tf.buf_id : 0;
+				shared.tex = tf.tex_desc;
+				if (tf.buf)
+					shared.buf = tf.buf_desc;
+				shared.ready = video->gpu_encode_ready_handle;
+				shared.ready_value = tf.ready_value;
+				shared.release = release->handle;
+				shared.release_value = tf.ready_value;
+			}
+
 			profile_start(gpu_encode_frame_name);
 			if (encoder->info.encode_texture2) {
 				struct encoder_texture tex = {0};
@@ -171,8 +368,14 @@ static void *gpu_encode_thread(void *data)
 				tex.tex[0] = tf.tex;
 				tex.tex[1] = tf.tex_uv;
 				tex.tex[2] = NULL;
+				tex.shared = release ? &shared : NULL;
 				success = encoder->info.encode_texture2(encoder->context.data, &tex, encoder->cur_pts,
 									lock_key, &next_key, &pkt, &received);
+				/* the encoder may read the frame until it signals its release timeline */
+				if (release) {
+					struct obs_gpu_hold hold = {release, tf.ready_value};
+					da_push_back(tf.holds, &hold);
+				}
 			} else {
 				success = encoder->info.encode_texture(encoder->context.data, tf.handle,
 								       encoder->cur_pts, lock_key, &next_key, &pkt,
@@ -220,6 +423,10 @@ static void *gpu_encode_thread(void *data)
 
 		pthread_mutex_lock(&video->gpu_encoder_mutex);
 
+		/* references of the holds added above (stop_gpu_encode waits for this thread before letting go) */
+		for (size_t i = tf_holds_before; i < tf.holds.num; i++)
+			tf.holds.array[i].release->refs++;
+
 		tf.lock_key = next_key;
 
 		if (--tf.count) {
@@ -252,35 +459,30 @@ static void *gpu_encode_thread(void *data)
 
 bool init_gpu_encoding(struct obs_core_video_mix *video)
 {
-	const struct video_output_info *info = video_output_get_info(video->video);
-
 	video->gpu_encode_stop = false;
 
-	deque_reserve(&video->gpu_encoder_avail_queue, NUM_ENCODE_TEXTURES);
-	for (size_t i = 0; i < NUM_ENCODE_TEXTURES; i++) {
-		gs_texture_t *tex;
-		gs_texture_t *tex_uv;
+	video->gpu_encode_frames = 0;
+	video->gpu_encode_buffer_users = 0;
+	video->gpu_encode_ready_value = 0;
 
-		if (info->format == VIDEO_FORMAT_P010) {
-			gs_texture_create_p010(&tex, &tex_uv, info->width, info->height,
-					       GS_RENDER_TARGET | GS_SHARED_KM_TEX);
+	/* Vulkan hands frames to encoders as OS handles, ordered by a timeline */
+	video->gpu_encode_shared = false;
+	if (gs_get_device_type() == GS_DEVICE_VULKAN) {
+		video->gpu_encode_ready = gs_timeline_create(0);
+		if (video->gpu_encode_ready && gs_timeline_export(video->gpu_encode_ready, native_handle_type(),
+								  &video->gpu_encode_ready_handle)) {
+			video->gpu_encode_shared = true;
 		} else {
-			gs_texture_create_nv12(&tex, &tex_uv, info->width, info->height,
-					       GS_RENDER_TARGET | GS_SHARED_KM_TEX);
+			blog(LOG_WARNING, "GPU encode: no exportable timeline, encoders get no shared frames");
+			gs_timeline_destroy(video->gpu_encode_ready);
+			video->gpu_encode_ready = NULL;
 		}
-		if (!tex) {
+	}
+
+	deque_reserve(&video->gpu_encoder_avail_queue, NUM_ENCODE_TEXTURES * sizeof(struct obs_tex_frame));
+	for (size_t i = 0; i < NUM_ENCODE_TEXTURES; i++) {
+		if (!gpu_encode_add_frame(video))
 			return false;
-		}
-
-#ifdef _WIN32
-		uint32_t handle = gs_texture_get_shared_handle(tex);
-#else
-		uint32_t handle = (uint32_t)-1;
-#endif
-
-		struct obs_tex_frame frame = {.tex = tex, .tex_uv = tex_uv, .handle = handle};
-
-		deque_push_back(&video->gpu_encoder_avail_queue, &frame, sizeof(frame));
 	}
 
 	if (os_sem_init(&video->gpu_encode_semaphore, 0) != 0)
@@ -322,8 +524,7 @@ void free_gpu_encoding(struct obs_core_video_mix *video)
 		while (x.size) {                                    \
 			struct obs_tex_frame frame;                 \
 			deque_pop_front(&x, &frame, sizeof(frame)); \
-			gs_texture_destroy(frame.tex);              \
-			gs_texture_destroy(frame.tex_uv);           \
+			gpu_frame_free_resources(&frame);           \
 		}                                                   \
 		deque_free(&x);                                     \
 	} while (false)
@@ -331,4 +532,16 @@ void free_gpu_encoding(struct obs_core_video_mix *video)
 	free_deque(video->gpu_encoder_queue);
 	free_deque(video->gpu_encoder_avail_queue);
 #undef free_deque
+
+	for (size_t i = 0; i < video->gpu_encode_exports.num; i++) {
+		struct gs_shared_texture_desc *d = &video->gpu_encode_exports.array[i].desc;
+		struct gs_shared_handle h = {d->type, d->win32, d->fds[0]};
+		gs_shared_handle_close(&h);
+	}
+	da_free(video->gpu_encode_exports);
+	gs_shared_handle_close(&video->gpu_encode_ready_handle);
+	gs_timeline_destroy(video->gpu_encode_ready);
+	video->gpu_encode_ready = NULL;
+	video->gpu_encode_shared = false;
+	video->gpu_encode_frames = 0;
 }

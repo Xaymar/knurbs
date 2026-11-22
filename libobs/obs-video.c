@@ -448,8 +448,10 @@ static inline void stage_output_texture(struct obs_core_video_mix *video, int cu
 
 static inline bool queue_frame(struct obs_core_video_mix *video, bool raw_active, struct obs_vframe_info *vframe_info)
 {
-	bool duplicate = !video->gpu_encoder_avail_queue.size ||
-			 (video->gpu_encoder_queue.size && vframe_info->count > 1);
+	struct obs_tex_frame tf;
+	/* Vulkan: a frame is free once every encoder that got it signalled its release (the pool grows meanwhile) */
+	bool duplicate = (video->gpu_encoder_queue.size && vframe_info->count > 1) ||
+			 !gpu_encode_pop_free_frame(video, &tf);
 
 	if (duplicate) {
 		struct obs_tex_frame *tf =
@@ -464,9 +466,6 @@ static inline bool queue_frame(struct obs_core_video_mix *video, bool raw_active
 		os_sem_post(video->gpu_encode_semaphore);
 		goto finish;
 	}
-
-	struct obs_tex_frame tf;
-	deque_pop_front(&video->gpu_encoder_avail_queue, &tf, sizeof(tf));
 
 	if (tf.released) {
 #ifdef _WIN32
@@ -502,6 +501,8 @@ static inline bool queue_frame(struct obs_core_video_mix *video, bool raw_active
 	tf.count = 1;
 	tf.timestamp = vframe_info->timestamp;
 	tf.released = true;
+	if (video->gpu_encode_shared)
+		gpu_encode_prepare_frame(video, &tf);
 #ifdef _WIN32
 	tf.handle = gs_texture_get_shared_handle(tf.tex);
 	gs_texture_release_sync(tf.tex, ++tf.lock_key);
