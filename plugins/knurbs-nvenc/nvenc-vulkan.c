@@ -77,13 +77,10 @@ void vulkan_free(struct nvenc_data *enc)
 	if (!enc->cu_ctx)
 		return;
 	cu->cuCtxPushCurrent(enc->cu_ctx);
-	for (size_t i = 0; i < enc->vk.inputs.num; i++) {
-		struct nv_vk_input *in = &enc->vk.inputs.array[i];
-		if (in->mapped)
-			nv.nvEncUnmapInputResource(enc->session, in->mapped);
-	}
 	for (size_t i = 0; i < enc->vk.buffers.num; i++) {
 		struct nv_vk_buffer *b = &enc->vk.buffers.array[i];
+		if (b->mapped)
+			nv.nvEncUnmapInputResource(enc->session, b->mapped);
 		if (b->reg)
 			nv.nvEncUnregisterResource(enc->session, b->reg);
 		if (b->mem)
@@ -188,11 +185,15 @@ static struct nv_vk_buffer *import_buffer(struct nvenc_data *enc, uint64_t id, c
 bool vulkan_release_input(struct nvenc_data *enc, size_t slot)
 {
 	struct nv_vk_input *in = &enc->vk.inputs.array[slot];
-	if (in->mapped) {
-		NVENCSTATUS err = nv.nvEncUnmapInputResource(enc->session, in->mapped);
-		in->mapped = NULL;
-		if (nv_failed(enc->encoder, err, __FUNCTION__, "unmap"))
-			return false;
+	if (in->buffer) {
+		struct nv_vk_buffer *b = &enc->vk.buffers.array[in->buffer - 1];
+		in->buffer = 0;
+		if (--b->map_count == 0) {
+			NVENCSTATUS err = nv.nvEncUnmapInputResource(enc->session, b->mapped);
+			b->mapped = NULL;
+			if (nv_failed(enc->encoder, err, __FUNCTION__, "unmap"))
+				return false;
+		}
 	}
 	if (in->release_value > enc->vk.signalled) {
 		CUDA_EXTERNAL_SEMAPHORE_SIGNAL_PARAMS sp = {0};
@@ -239,11 +240,15 @@ bool vulkan_encode(void *data, struct encoder_texture *texture, int64_t pts, str
 		goto out;
 
 	struct nv_vk_input *in = &enc->vk.inputs.array[enc->next_bitstream];
-	NV_ENC_MAP_INPUT_RESOURCE map = {NV_ENC_MAP_INPUT_RESOURCE_VER};
-	map.registeredResource = b->reg;
-	if (NV_FAILED(nv.nvEncMapInputResource(enc->session, &map)))
-		goto out;
-	in->mapped = map.mappedResource;
+	if (!b->map_count) {
+		NV_ENC_MAP_INPUT_RESOURCE map = {NV_ENC_MAP_INPUT_RESOURCE_VER};
+		map.registeredResource = b->reg;
+		if (NV_FAILED(nv.nvEncMapInputResource(enc->session, &map)))
+			goto out;
+		b->mapped = map.mappedResource;
+	}
+	b->map_count++;
+	in->buffer = (size_t)(b - enc->vk.buffers.array) + 1;
 	in->release_value = shared->release_value;
 	if (shared->release_value > enc->vk.queued)
 		enc->vk.queued = shared->release_value;
@@ -251,7 +256,7 @@ bool vulkan_encode(void *data, struct encoder_texture *texture, int64_t pts, str
 	deque_push_back(&enc->dts_list, &pts, sizeof(pts));
 	struct nv_bitstream *bs = &enc->bitstreams.array[enc->next_bitstream];
 	enc->input_pitch = b->pitch;
-	ok = nvenc_encode_base(enc, bs, in->mapped, pts, packet, received_packet);
+	ok = nvenc_encode_base(enc, bs, b->mapped, pts, packet, received_packet);
 
 out:
 	cu->cuCtxPopCurrent(NULL);

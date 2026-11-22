@@ -170,11 +170,15 @@ struct nv_vk_buffer {
 	CUdeviceptr ptr;
 	uint32_t pitch;
 	NV_ENC_REGISTERED_PTR reg;
+	/* libobs hands a frame over again when the renderer lags, so a buffer can be the input of several bitstream
+	 * slots at once: it stays mapped until the last of them is done. */
+	NV_ENC_INPUT_PTR mapped;
+	uint32_t map_count;
 };
 
 /* Vulkan: the input of a bitstream slot */
 struct nv_vk_input {
-	NV_ENC_INPUT_PTR mapped;
+	size_t buffer; /* index + 1 into vk.buffers; 0: none */
 	uint64_t release_value;
 };
 

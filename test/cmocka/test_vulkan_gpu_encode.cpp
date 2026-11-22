@@ -5,7 +5,7 @@
 //   test_vulkan_gpu_encode <vulkan module> <encoder module> <encoder id> nv12|p010 [key=value ...]
 //
 // The settings are applied to the encoder (numbers as integers, true/false as booleans, anything else a string),
-// except the test's own overdraw=N (see there).
+// except the test's own overdraw=N and stall=N (see there).
 // Every decoded frame must be one the renderer produced, whole: the frame number at the top and at the bottom agree
 // (no frame mixed from two), the grey level and the bar match that number (no stale or half-written frame), and the
 // numbers never go backwards. The run fails on any validation or synchronisation validation message.
@@ -50,6 +50,9 @@ static char **argv_;
 // Full-frame quads drawn under the pattern each frame ("overdraw=N"), so the GPU is still busy when the encoder
 // thread picks the frame up: without that, a missing GPU wait never shows on a small frame.
 static int overdraw = 0;
+// Every N-th frame's render sleeps for three frame times ("stall=N"): libobs then hands the next frames to the
+// encoder more than once (obs_tex_frame::count), so one shared frame is in several encoder slots at a time.
+static int stall = 0;
 
 /* ---- the pattern ---- */
 
@@ -65,6 +68,7 @@ static uint32_t bar_x(uint32_t n)
 
 struct pattern_src {
 	uint32_t n = 0;
+	uint32_t stalled = 0;
 };
 
 static void fill(gs_effect_t *solid, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t level)
@@ -84,6 +88,10 @@ static void pattern_render(void *data, gs_effect_t *)
 {
 	auto p = (pattern_src *)data;
 	const uint32_t n = p->n;
+	if (stall && n && n % stall == 0 && n != p->stalled) {
+		p->stalled = n;
+		os_sleep_ms(50);
+	}
 	// Grey levels written as they are, without sRGB conversion: Y = 16 + 219 * level / 255 for NV12 (see y_of).
 	const bool previous = gs_framebuffer_srgb_enabled();
 	gs_enable_framebuffer_srgb(false);
@@ -292,7 +300,12 @@ static int check_frames(const std::vector<decoded> &frames)
 		distinct += !i || top != prev;
 		prev = top;
 	}
-	print_message("%zu frames decoded, %d distinct, %d bad\n", frames.size(), distinct, failures);
+	print_message("%zu frames decoded, %d distinct, %zu repeated, %d bad\n", frames.size(), distinct,
+		      frames.size() - (size_t)distinct, failures);
+	if (stall && frames.size() == (size_t)distinct) {
+		print_message("stall=%d gave no repeated frames: the case under test did not happen\n", stall);
+		++failures;
+	}
 	if (distinct < WANT_PACKETS / 2) {
 		print_message("too few distinct frames\n");
 		++failures;
@@ -309,8 +322,8 @@ static void apply_setting(obs_data_t *s, const char *kv)
 	std::string key(kv, eq), value(eq + 1);
 	char *end = nullptr;
 	const long long i = strtoll(value.c_str(), &end, 10);
-	if (key == "overdraw") { // the test's own, not the encoder's
-		overdraw = (int)i;
+	if (key == "overdraw" || key == "stall") { // the test's own, not the encoder's
+		(key == "overdraw" ? overdraw : stall) = (int)i;
 		return;
 	}
 	if (!value.empty() && *end == 0) {

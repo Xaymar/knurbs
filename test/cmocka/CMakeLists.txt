@@ -450,6 +450,8 @@ if(ENABLE_VULKAN)
       _gpu_encode_test(nvenc_hevc_p010 *nv-vk64* knurbs-nvenc ${_nv}.hevc p010 rate_control=CQP cqp=20 bf=2)
       # Lookahead holds many frames: the shared frame pool grows past its initial size.
       _gpu_encode_test(nvenc_h264_lookahead *nv-vk64* knurbs-nvenc ${_nv}.h264 nv12 rate_control=CQP cqp=20 bf=3 lookahead=true)
+      # A stalled render: libobs repeats frames, so one shared frame sits in several NVENC slots at once.
+      _gpu_encode_test(nvenc_h264_repeat *nv-vk64* knurbs-nvenc ${_nv}.h264 nv12 rate_control=CQP cqp=20 bf=2 stall=10)
     endif()
     set_tests_properties(
       ${_gpu_encode_tests}
