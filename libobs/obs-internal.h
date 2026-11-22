@@ -1452,6 +1452,14 @@ struct obs_encoder {
 };
 
 extern struct obs_encoder_info *find_encoder(const char *id);
+
+/* Moves the named top-level property to the front of the list. */
+extern void obs_properties_move_to_front(obs_properties_t *props, const char *name);
+
+/* Adds the patent notice to the top of an encoder's properties, creating
+ * them if the encoder has none. */
+extern obs_properties_t *obs_encoder_add_patent_notice(obs_properties_t *props);
+
 /* find_encoder, following aliases; fills hops and num_hops when given. */
 extern struct obs_encoder_info *find_encoder_resolved(const char *id, struct obs_type_alias_hop *hops,
 						      size_t *num_hops);
