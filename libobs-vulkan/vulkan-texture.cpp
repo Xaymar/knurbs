@@ -176,6 +176,10 @@ static void destroy_texture_objects(gs_device *d, gs_texture *tex)
 	} else {
 		d->tracker.forget(tex->image);
 	}
+	if (tex->km_probe) {
+		vk_interop_release(tex->km_probe);
+		tex->km_probe = nullptr;
+	}
 	if (tex->map_ptr) { // mapped, never unmapped: arena space, nothing to free; the slot may reuse it again
 		--d->frames.frames[tex->map_slot].maps;
 	}
@@ -185,7 +189,10 @@ static void destroy_texture_objects(gs_device *d, gs_texture *tex)
 		vkDestroyImageView(dev, t.rt_view, nullptr);
 		vkDestroyImageView(dev, t.rt_srgb_view, nullptr);
 		if (!shared) {
-			vmaDestroyImage(vma, t.image, t.alloc);
+			vmaDestroyImage(vma, t.image, t.alloc); // external textures: alloc is null, only the image goes
+			if (t.memory) {
+				vkFreeMemory(dev, t.memory, nullptr);
+			}
 		}
 	});
 }
@@ -500,6 +507,109 @@ static gs_stage_surface *create_planar_stagesurface(gs_device *d, uint32_t width
 		return nullptr;
 	}
 	return s;
+}
+
+/* ---- External textures (used by vulkan-interop.cpp) ------------------------------------------------------------ */
+
+bool vk_texture_image_info(gs_device *d, uint32_t width, uint32_t height, enum gs_color_format format,
+			   enum gs_shared_layout layout, uint32_t flags, vk_image_desc &out)
+{
+	const bool rt = (flags & GS_RENDER_TARGET) != 0;
+	out = vk_image_desc{};
+	VkImageCreateInfo &ii = out.ii;
+	ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	out.fl.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
+	if (layout != GS_SHARED_SINGLE) {
+		const vk_planar_format &f = planar_format(layout == GS_SHARED_P010);
+		if (!width || !height || (width & 1) || (height & 1) || !planar_supported(d, f, width, height)) {
+			return false;
+		}
+		out.views[0] = f.y;
+		out.views[1] = f.uv;
+		out.fl.viewFormatCount = 2;
+		out.use_list = true;
+		ii.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+		ii.format = f.image;
+		ii.usage = planar_usage(rt);
+	} else {
+		const VkFormat fmt = vk_format(format);
+		if (fmt == VK_FORMAT_UNDEFINED || !width || !height) {
+			return false;
+		}
+		ii.format = fmt;
+		ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+			   VK_IMAGE_USAGE_TRANSFER_DST_BIT | (rt ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0);
+		if (gs_is_srgb_format(format)) {
+			out.views[0] = fmt;
+			out.views[1] = fmt == VK_FORMAT_R8G8B8A8_UNORM ? VK_FORMAT_R8G8B8A8_SRGB
+								       : VK_FORMAT_B8G8R8A8_SRGB;
+			out.fl.viewFormatCount = 2;
+			out.use_list = true;
+			ii.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+		}
+	}
+	out.fl.pViewFormats = out.views;
+	ii.imageType = VK_IMAGE_TYPE_2D;
+	ii.extent = {width, height, 1};
+	ii.mipLevels = 1;
+	ii.arrayLayers = 1;
+	ii.samples = VK_SAMPLE_COUNT_1_BIT;
+	ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+	ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	return true;
+}
+
+bool vk_wrap_image(gs_device *d, VkImage image, uint32_t width, uint32_t height, enum gs_color_format format,
+		   enum gs_shared_layout layout, uint32_t flags, gs_texture **tex, gs_texture **tex_uv)
+{
+	const bool rt = (flags & GS_RENDER_TARGET) != 0;
+	if (layout != GS_SHARED_SINGLE) {
+		const vk_planar_format &f = planar_format(layout == GS_SHARED_P010);
+		gs_texture *y = create_plane_texture(d, image, VK_NULL_HANDLE, f, false, width, height, rt);
+		gs_texture *uv = y ? create_plane_texture(d, image, VK_NULL_HANDLE, f, true, width, height, rt)
+				   : nullptr;
+		if (!uv) {
+			if (y) {
+				vkDestroyImageView(d->dev, y->view, nullptr);
+				vkDestroyImageView(d->dev, y->rt_view, nullptr);
+				delete y;
+			}
+			return false;
+		}
+		y->plane_peer = uv;
+		uv->plane_peer = y;
+		*tex = y;
+		*tex_uv = uv;
+		return true;
+	}
+	auto t = new gs_texture{d};
+	t->image = image;
+	t->width = width;
+	t->height = height;
+	t->levels = 1;
+	t->format = format;
+	const VkFormat fmt = vk_format(format);
+	const bool srgb = gs_is_srgb_format(format);
+	const VkFormat srgb_fmt = fmt == VK_FORMAT_R8G8B8A8_UNORM ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_B8G8R8A8_SRGB;
+	t->view = create_view(d, t, fmt);
+	t->srgb_view = srgb ? create_view(d, t, srgb_fmt) : VK_NULL_HANDLE;
+	if (rt) {
+		t->rt_format = fmt;
+		t->rt_view = create_view(d, t, fmt, true);
+		if (srgb) {
+			t->rt_srgb_format = srgb_fmt;
+			t->rt_srgb_view = create_view(d, t, srgb_fmt, true);
+		}
+	}
+	if (!t->view || (srgb && !t->srgb_view) || (rt && !t->rt_view) || (rt && srgb && !t->rt_srgb_view)) {
+		for (VkImageView v : {t->view, t->srgb_view, t->rt_view, t->rt_srgb_view}) {
+			vkDestroyImageView(d->dev, v, nullptr); // never used by a command
+		}
+		delete t;
+		return false;
+	}
+	*tex = t;
+	return true;
 }
 
 extern "C" {

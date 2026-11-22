@@ -137,6 +137,16 @@ struct gs_device {
 	VkImageView rendering_view = VK_NULL_HANDLE;
 	VkImageView rendering_depth = VK_NULL_HANDLE; // its depth view (VK_NULL_HANDLE: none)
 
+	// External memory and synchronisation (vulkan-interop.cpp).
+	VkPhysicalDeviceIDProperties id = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+	uint32_t vendor_id = 0, device_id = 0;
+	bool ext_memory_win32 = false, ext_semaphore_win32 = false, ext_keyed_mutex = false;
+	struct vk_interop *interop = nullptr; // extension entry points and the D3D11 probe device
+	// Consumed by the next submission (vk_flush): timeline waits and signals, keyed mutex releases.
+	vk_submit_extra pending;
+	std::vector<VkDeviceMemory> km_release_mem;
+	std::vector<uint64_t> km_release_key;
+
 	gs_device() { matrix4_identity(&proj); }
 };
 
@@ -173,7 +183,60 @@ struct gs_texture {
 	VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT; // PLANE_0 (Y) or PLANE_1 (UV) for plane views
 	VkFormat image_format = VK_FORMAT_UNDEFINED;           // plane views: the multi-planar format of `image`
 	gs_texture *plane_peer = nullptr;                      // the other plane's view while it exists
+	// External textures (vulkan-interop.cpp): imported or exportable memory in a dedicated VkDeviceMemory instead of
+	// `alloc`, freed with the image. Plane views share it as they share `image`.
+	VkDeviceMemory memory = VK_NULL_HANDLE;
+	VkDeviceSize memory_size = 0;
+	VkExternalMemoryHandleTypeFlags export_types = 0; // exportable as these
+	enum gs_shared_layout layout = GS_SHARED_SINGLE;
+	uint32_t create_flags = 0;            // GS_RENDER_TARGET as created (part of the export description)
+	uint32_t shared_handle = 0xFFFFFFFFu; // legacy open_shared/open_nt_shared: the handle it was opened from
+	bool keyed_mutex = false;             // imported D3D11 texture with a keyed mutex
+	void *km_probe = nullptr; // keyed mutex textures: IDXGIKeyedMutex on the D3D11 probe (finite-timeout acquires)
 };
+
+// Exportable pitch-linear NV12/P010 frame (gs_sharedbuf_*).
+struct gs_shared_buffer {
+	gs_device *device;
+	VkBuffer buffer = VK_NULL_HANDLE;
+	VkDeviceMemory memory = VK_NULL_HANDLE;
+	VkDeviceSize size = 0;
+	uint32_t width, height;
+	enum gs_shared_layout layout;
+	uint32_t offsets[2], pitches[2];
+};
+
+struct gs_timeline {
+	gs_device *device;
+	VkSemaphore sem = VK_NULL_HANDLE;
+	bool exportable = false;
+};
+
+// Create parameters of an external (exportable or imported) texture, the same as device_texture_create (single
+// plane, one level) and device_texture_create_nv12/_p010 use. False when the format or size is unsupported.
+struct vk_image_desc {
+	VkImageCreateInfo ii;
+	VkImageFormatListCreateInfo fl; // chained by the caller when use_list
+	VkFormat views[2];
+	bool use_list;
+};
+bool vk_texture_image_info(gs_device *d, uint32_t width, uint32_t height, enum gs_color_format format,
+			   enum gs_shared_layout layout, uint32_t flags, vk_image_desc &out);
+// gs_texture(s) with views of `image` (memory bound by the caller, which keeps the image on failure).
+bool vk_wrap_image(gs_device *d, VkImage image, uint32_t width, uint32_t height, enum gs_color_format format,
+		   enum gs_shared_layout layout, uint32_t flags, gs_texture **tex, gs_texture **tex_uv);
+
+// Interop setup and teardown (vulkan-interop.cpp): device extensions to enable when present, then entry points.
+void vk_interop_extensions(std::vector<const char *> &wanted);
+void vk_interop_init(gs_device *d, const std::vector<const char *> &enabled);
+void vk_interop_free(gs_device *d);
+// Releases a texture's km_probe (a COM object), called when the texture is destroyed.
+void vk_interop_release(void *com);
+// vk_flush: records the release of acquired external resources and moves d->pending (and keyed mutex releases)
+// into `extra` for the submission; `km` backs extra.pnext and must outlive the submit.
+struct vk_keyed_mutex_info;
+void vk_interop_prepare_submit(gs_device *d, VkCommandBuffer cmd, vk_submit_extra &extra, vk_keyed_mutex_info *&km);
+void vk_interop_finish_submit(vk_keyed_mutex_info *km);
 
 // True for a plane view of a two-plane image.
 inline bool vk_is_plane(const gs_texture *t)
@@ -354,6 +417,8 @@ EXPORT int obs_vulkan_validation_messages(void);
 EXPORT void obs_vulkan_test_stage_mip(gs_device_t *device, gs_stagesurf_t *dst, gs_texture_t *src, uint32_t level);
 // Test hook: glslang process references currently held (devices plus running compiles).
 EXPORT int obs_vulkan_glslang_refs(void);
+// Test hook: reads back the first `size` bytes of a gs_sharedbuf_t (waits for the GPU).
+EXPORT bool obs_vulkan_test_read_sharedbuf(gs_sharedbuf_t *buf, void *dst, uint64_t size);
 // Host API (optional, not a graphics import): global priority the graphics queue of devices created from now on
 // asks for, as a VkQueueGlobalPriorityKHR value (128 low, the default; 256 medium; 512 high; 1024 realtime).
 // OBS_VULKAN_REALTIME=1 overrides it with realtime. Returns 0 for any other value (unchanged), 1 otherwise.

@@ -103,16 +103,44 @@ static void test_optional_not_exported(void **)
 	assert_true(names.size() > 10);
 	size_t exported = 0;
 	for (auto &name : names) {
-		// Implemented for real (Task 2; NV12/P010 in phase 2), so exporting them is correct.
-		static const char *implemented[] = {"device_enum_adapters",
-						    "gpu_get_driver_version",
-						    "gpu_get_renderer",
-						    "device_nv12_available",
-						    "device_p010_available",
-						    "device_texture_create_nv12",
-						    "device_texture_create_p010",
-						    "device_stagesurface_create_nv12",
-						    "device_stagesurface_create_p010"};
+		// Implemented for real (Task 2; NV12/P010 and the Windows interop in phase 2), so exporting them is
+		// correct. The sync_file pair is Linux-only and not yet implemented there.
+		static const char *implemented[] = {
+			"device_enum_adapters",
+			"gpu_get_driver_version",
+			"gpu_get_renderer",
+			"device_nv12_available",
+			"device_p010_available",
+			"device_texture_create_nv12",
+			"device_texture_create_p010",
+			"device_stagesurface_create_nv12",
+			"device_stagesurface_create_p010",
+			"device_get_adapter_identity",
+			"device_shared_texture_supported",
+			"device_texture_create_exportable",
+			"device_texture_export",
+			"device_texture_import",
+			"device_sharedbuf_create",
+			"gs_sharedbuf_destroy",
+			"device_sharedbuf_copy_texture",
+			"device_sharedbuf_export",
+			"device_timeline_create",
+			"device_timeline_import",
+			"device_timeline_export",
+			"gs_timeline_destroy",
+			"device_timeline_signal",
+			"device_timeline_wait",
+			"device_timeline_get_value",
+			"device_timeline_wait_cpu",
+			"device_timeline_signal_cpu",
+#ifdef _WIN32
+			"device_texture_open_shared",
+			"device_texture_open_nt_shared",
+			"device_texture_get_shared_handle",
+			"device_texture_acquire_sync",
+			"device_texture_release_sync",
+#endif
+		};
 		bool real = false;
 		for (const char *n : implemented) {
 			real |= name == n;
@@ -137,7 +165,8 @@ static void test_listed_extra_exports_exist_and_are_not_imports(void **)
 	void *module = open_module();
 	assert_non_null(module);
 	const char *extra[] = {"obs_vulkan_set_global_priority", "obs_vulkan_validation_messages",
-			       "obs_vulkan_test_stage_mip", "obs_vulkan_glslang_refs"};
+			       "obs_vulkan_test_stage_mip", "obs_vulkan_glslang_refs",
+			       "obs_vulkan_test_read_sharedbuf"};
 	auto required = imports_for_platform("GRAPHICS_IMPORT(");
 	auto optional = imports_for_platform("GRAPHICS_IMPORT_OPTIONAL(");
 	for (const char *name : extra) {
@@ -150,6 +179,29 @@ static void test_listed_extra_exports_exist_and_are_not_imports(void **)
 	}
 	os_dlclose(module);
 }
+
+#ifdef NULL_GRAPHICS_MODULE
+// The null graphics module (test/null-graphics) stands in for a backend in the libobs tests, so it must export every
+// import of this platform, required and optional, or libobs's paths behind the optional ones go untested.
+static void test_null_module_exports_every_import(void **)
+{
+	void *module = os_dlopen(NULL_GRAPHICS_MODULE);
+	assert_non_null(module);
+	size_t missing = 0, total = 0;
+	for (const char *key : {"GRAPHICS_IMPORT(", "GRAPHICS_IMPORT_OPTIONAL("}) {
+		for (auto &name : imports_for_platform(key)) {
+			++total;
+			if (!os_dlsym(module, name.c_str())) {
+				print_message("libobs-null lacks: %s\n", name.c_str());
+				++missing;
+			}
+		}
+	}
+	assert_true(total > EXPECTED_REQUIRED_WIN);
+	assert_int_equal(missing, 0);
+	os_dlclose(module);
+}
+#endif
 
 static void test_identity(void **)
 {
@@ -173,6 +225,9 @@ int main()
 		cmocka_unit_test(test_optional_not_exported),
 		cmocka_unit_test(test_listed_extra_exports_exist_and_are_not_imports),
 		cmocka_unit_test(test_identity),
+#ifdef NULL_GRAPHICS_MODULE
+		cmocka_unit_test(test_null_module_exports_every_import),
+#endif
 	};
 	return cmocka_run_group_tests(tests, NULL, NULL);
 }

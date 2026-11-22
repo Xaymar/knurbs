@@ -15,6 +15,7 @@ target_sources(
     vulkan-frame.cpp
     vulkan-frame.hpp
     vulkan-instance.cpp
+    vulkan-interop.cpp
     vulkan-pipeline.cpp
     vulkan-shader.cpp
     vulkan-shaderprocessor.cpp
@@ -61,6 +62,8 @@ endif()
 # returns GS_ERROR_NOT_SUPPORTED. Linux still hard-links libvulkan (untested in this branch).
 if(OS_WINDOWS)
   target_link_libraries(libobs-vulkan PRIVATE delayimp)
+  # vulkan-interop.cpp reads the description of D3D11 share handles given to the legacy open_shared exports.
+  target_link_libraries(libobs-vulkan PRIVATE d3d11 dxgi)
   target_link_options(libobs-vulkan PRIVATE /DELAYLOAD:vulkan-1.dll)
 endif()
 

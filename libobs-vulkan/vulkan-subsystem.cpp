@@ -1,5 +1,5 @@
 // Graphics exports: device lifetime, render target, copy, clear, staging and flush here. Still stubs: cube textures,
-// timers, shared/GDI textures, gs_texture_get_obj, device_get_device_obj, HDR, debug markers, Linux dmabuf and sync.
+// timers, GDI textures, gs_texture_get_obj, device_get_device_obj, HDR, debug markers, Linux dmabuf and sync.
 // Textures and stage surfaces live in vulkan-texture.cpp, swapchains and present in vulkan-swapchain.cpp, buffers and
 // samplers in vulkan-buffers.cpp, state, pipelines and draw in vulkan-pipeline.cpp.
 #include "vulkan-subsystem.hpp"
@@ -30,18 +30,26 @@ bool vk_flush(gs_device *d, VkSemaphore *signal)
 		return true;
 	}
 	vk_end_rendering(d);
+	// External resources go back to their other owners at the end of every submission, with the caller's timeline
+	// waits/signals and keyed mutex releases (vulkan-interop.cpp).
+	vk_submit_extra extra;
+	vk_keyed_mutex_info *km = nullptr;
+	vk_interop_prepare_submit(d, d->frames.frames[d->frames.index].cmd, extra, km);
 	// The submission waits on a pending acquire; see submit_pending (vulkan-swapchain.cpp) for one with no commands.
 	VkSemaphore wait = d->acquire_wait;
 	d->acquire_wait = VK_NULL_HANDLE;
-	if (d->frames.submit(d->graphics, wait ? &wait : nullptr, signal)) {
+	const bool ok = d->frames.submit(d->graphics, wait ? &wait : nullptr, signal, &extra);
+	vk_interop_finish_submit(km);
+	if (ok) {
 		if (wait) {
 			// Unsignalled again once this submission (just made the ring's latest) has run.
 			d->frames.defer_destroy([d, wait] { d->spare_sems.push_back(wait); });
 		}
 		return true;
 	}
-	// The tracker recorded layouts the failed command buffer never reached; restart from UNDEFINED (contents lost).
-	d->tracker = vk_tracker{};
+	// The tracker recorded layouts the failed command buffer never reached; restart from UNDEFINED (contents lost),
+	// external resources from GENERAL.
+	d->tracker.reset();
 	if (wait) {
 		vk_consume_semaphore(d, wait);
 	}
@@ -465,10 +473,7 @@ EXPORT bool device_gdi_texture_available(void)
 	return {};
 }
 
-EXPORT bool device_shared_texture_available(void)
-{
-	return {};
-}
+// device_shared_texture_available and the shared texture exports live in vulkan-interop.cpp.
 
 #elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)
 

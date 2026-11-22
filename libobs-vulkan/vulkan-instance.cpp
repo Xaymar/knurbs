@@ -233,11 +233,16 @@ static int create_device(gs_device *d, uint32_t adapter)
 	vkEnumeratePhysicalDevices(d->instance, &n, phys.data());
 	d->phys = phys[adapter];
 
-	VkPhysicalDeviceDriverProperties drv = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+	VkPhysicalDeviceIDProperties idp = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+	VkPhysicalDeviceDriverProperties drv = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES, &idp};
 	VkPhysicalDeviceProperties2 props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &drv};
 	vkGetPhysicalDeviceProperties2(d->phys, &props);
 	if (props.properties.apiVersion < VK_API_VERSION_1_3)
 		return GS_ERROR_NOT_SUPPORTED;
+	idp.pNext = nullptr;
+	d->id = idp;
+	d->vendor_id = props.properties.vendorID;
+	d->device_id = props.properties.deviceID;
 
 	VkPhysicalDeviceVulkan13Features f13 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
 	VkPhysicalDeviceVulkan12Features f12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &f13};
@@ -269,6 +274,14 @@ static int create_device(gs_device *d, uint32_t adapter)
 	std::vector<VkExtensionProperties> dexts(next);
 	vkEnumerateDeviceExtensionProperties(d->phys, nullptr, &next, dexts.data());
 	const bool have_prio_ext = has_ext(dexts, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
+	// External memory and sync (vulkan-interop.cpp): every wanted extension the device has.
+	std::vector<const char *> wanted, interop_exts;
+	vk_interop_extensions(wanted);
+	for (const char *e : wanted) {
+		if (has_ext(dexts, e)) {
+			interop_exts.push_back(e);
+		}
+	}
 	d->can_present = d->can_present && has_ext(dexts, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 	if (have_prio_ext)
 		for (uint32_t i = 0; i < nfam; ++i)
@@ -340,19 +353,18 @@ static int create_device(gs_device *d, uint32_t adapter)
 			qi[i].queueCount = 1;
 			qi[i].pQueuePriorities = &one;
 		}
-		const char *dev_exts[2];
-		uint32_t ndev_exts = 0;
+		std::vector<const char *> dev_exts = interop_exts;
 		if (any)
-			dev_exts[ndev_exts++] = VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME;
+			dev_exts.push_back(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
 		if (d->can_present)
-			dev_exts[ndev_exts++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+			dev_exts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 		VkDeviceCreateInfo di = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
 		di.pNext = &en12;
 		di.pEnabledFeatures = &core;
 		di.queueCreateInfoCount = nq;
 		di.pQueueCreateInfos = qi;
-		di.enabledExtensionCount = ndev_exts;
-		di.ppEnabledExtensionNames = dev_exts;
+		di.enabledExtensionCount = (uint32_t)dev_exts.size();
+		di.ppEnabledExtensionNames = dev_exts.data();
 		// What vkCreateDevice really receives, read back from the chains (0: no global priority struct).
 		for (uint32_t i = 0; i < nq; ++i) {
 			chained[i] = (VkQueueGlobalPriorityKHR)0;
@@ -423,6 +435,7 @@ static int create_device(gs_device *d, uint32_t adapter)
 	d->frames.vma = d->vma;
 	if (!d->frames.init(d->dev, d->graphics.family))
 		return GS_ERROR_FAIL;
+	vk_interop_init(d, interop_exts);
 	return GS_SUCCESS;
 }
 
@@ -458,6 +471,7 @@ void vk_device_free(gs_device *d)
 	if (d->dev)
 		vkDeviceWaitIdle(d->dev);
 	d->frames.destroy(); // runs deferred work, which returns acquire semaphores to spare_sems
+	vk_interop_free(d);
 	vk_pipelines_free(d);
 	if (d->acquire_wait)
 		d->spare_sems.push_back(d->acquire_wait);
