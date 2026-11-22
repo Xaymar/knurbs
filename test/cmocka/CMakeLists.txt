@@ -287,6 +287,18 @@ if(ENABLE_VULKAN)
   target_link_libraries(test_vulkan_depth PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
   add_test(test_vulkan_depth test_vulkan_depth)
 
+  # Native objects, timers, debug markers, cube textures, HDR format choice and fast clear (test_vulkan_features), and
+  # the device-loss rebuild (test_vulkan_loss); need a device (skip without one).
+  foreach(_test IN ITEMS test_vulkan_features test_vulkan_loss)
+    add_executable(${_test} ${_test}.cpp)
+    target_include_directories(${_test} PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan)
+    target_compile_definitions(${_test} PRIVATE OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan")
+    target_compile_features(${_test} PRIVATE cxx_std_17)
+    add_dependencies(${_test} libobs-vulkan)
+    target_link_libraries(${_test} PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
+    add_test(${_test} ${_test})
+  endforeach()
+
   # Every .effect in the tree and texrender through the generic gs_* API (gs_create); skips without a device.
   # The test walks the same directories at run time and must find exactly this many.
   file(
@@ -380,6 +392,8 @@ if(ENABLE_VULKAN)
     test_vulkan_draw
     test_vulkan_nv12
     test_vulkan_depth
+    test_vulkan_features
+    test_vulkan_loss
     test_vulkan_effects
     test_vulkan_video_vulkan
     PROPERTIES

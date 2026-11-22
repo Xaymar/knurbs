@@ -103,7 +103,8 @@ static void test_optional_not_exported(void **)
 	assert_true(names.size() > 10);
 	size_t exported = 0;
 	for (auto &name : names) {
-		// Implemented for real (Task 2; NV12/P010 and the Windows interop in phase 2), so exporting them is
+		// Implemented for real (Task 2; NV12/P010 and the Windows interop in phase 2; device loss and fast clear in
+		// phase 2 step 3), so exporting them is
 		// correct. The sync_file pair is Linux-only and not yet implemented there.
 		static const char *implemented[] = {
 			"device_enum_adapters",
@@ -133,6 +134,9 @@ static void test_optional_not_exported(void **)
 			"device_timeline_get_value",
 			"device_timeline_wait_cpu",
 			"device_timeline_signal_cpu",
+			"device_register_loss_callbacks",
+			"device_unregister_loss_callbacks",
+			"device_can_adapter_fast_clear",
 #ifdef _WIN32
 			"device_texture_open_shared",
 			"device_texture_open_nt_shared",
@@ -164,9 +168,13 @@ static void test_listed_extra_exports_exist_and_are_not_imports(void **)
 {
 	void *module = open_module();
 	assert_non_null(module);
-	const char *extra[] = {"obs_vulkan_set_global_priority", "obs_vulkan_validation_messages",
-			       "obs_vulkan_test_stage_mip", "obs_vulkan_glslang_refs",
-			       "obs_vulkan_test_read_sharedbuf"};
+	const char *extra[] = {"obs_vulkan_set_global_priority",
+			       "obs_vulkan_validation_messages",
+			       "obs_vulkan_test_stage_mip",
+			       "obs_vulkan_glslang_refs",
+			       "obs_vulkan_test_read_sharedbuf",
+			       "obs_vulkan_test_monitor_info",
+			       "obs_vulkan_test_choose_surface_format"};
 	auto required = imports_for_platform("GRAPHICS_IMPORT(");
 	auto optional = imports_for_platform("GRAPHICS_IMPORT_OPTIONAL(");
 	for (const char *name : extra) {
