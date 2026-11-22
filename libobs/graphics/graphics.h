@@ -794,6 +794,124 @@ EXPORT bool gs_texture_create_p010(gs_texture_t **tex_y, gs_texture_t **tex_uv, 
 
 EXPORT bool gs_is_monitor_hdr(void *monitor);
 
+/* ------------------------------------------------------------------------- */
+/* External memory and synchronisation (docs/graphics-interop.md)            */
+/*                                                                           */
+/* Textures, pitch-linear frame buffers and timeline semaphores shared with  */
+/* other graphics APIs, devices or processes as OS handles (NT handles on    */
+/* Windows, file descriptors on Linux), never as API objects. Every function */
+/* except gs_shared_handle_close needs the graphics context. A backend that  */
+/* lacks one of them returns false, NULL or 0.                               */
+
+enum gs_handle_type {
+	GS_HANDLE_NONE = 0,
+	GS_HANDLE_WIN32 = 1,             /* NT handle to memory or a timeline exported by Vulkan (opaque) */
+	GS_HANDLE_WIN32_D3D11 = 2,       /* NT handle to a D3D11 texture (MISC_SHARED_NTHANDLE) */
+	GS_HANDLE_WIN32_D3D11_KMT = 3,   /* legacy global D3D11 share handle (MISC_SHARED); never closed */
+	GS_HANDLE_WIN32_D3D12_FENCE = 4, /* NT handle to an ID3D12Fence or ID3D11Fence (a timeline) */
+	GS_HANDLE_FD = 5,                /* fd to memory or a timeline exported by Vulkan (opaque) */
+	GS_HANDLE_DMABUF = 6,            /* Linux dmabuf, one fd per plane */
+	GS_HANDLE_SYNC_FD = 7,           /* Linux sync_file (binary, one-shot) */
+};
+
+struct gs_shared_handle {
+	enum gs_handle_type type;
+	void *win32; /* GS_HANDLE_WIN32* types */
+	int fd;      /* fd types; -1 when unused */
+};
+
+/* Closes an exported handle (CloseHandle or close) and resets it to GS_HANDLE_NONE. KMT handles are names, not
+ * references, and are only reset. Needs no graphics context. */
+EXPORT void gs_shared_handle_close(struct gs_shared_handle *handle);
+
+enum gs_shared_layout {
+	GS_SHARED_SINGLE = 0, /* one plane of gs_shared_texture_desc::format */
+	GS_SHARED_NV12 = 1,   /* two planes, 8-bit 4:2:0 */
+	GS_SHARED_P010 = 2,   /* two planes, 10 bits in the high bits of 16, 4:2:0 */
+};
+
+#define GS_SHARED_MAX_PLANES 4
+#define GS_SHARED_MODIFIER_INVALID 0x00ffffffffffffffULL /* DRM_FORMAT_MOD_INVALID: implicit modifier */
+
+/* Everything an importer needs. Filled by gs_texture_export / gs_sharedbuf_export, or by the caller for memory
+ * made by another API. The handle is borrowed: importing never takes it over, the caller closes it afterwards. */
+struct gs_shared_texture_desc {
+	enum gs_handle_type type;
+	void *win32;                   /* GS_HANDLE_WIN32* types */
+	int fds[GS_SHARED_MAX_PLANES]; /* fd types: GS_HANDLE_FD uses fds[0]; dmabuf one per plane; -1 unused */
+	uint32_t width, height;
+	enum gs_color_format format; /* GS_SHARED_SINGLE only */
+	enum gs_shared_layout layout;
+	uint32_t flags;      /* GS_RENDER_TARGET; must equal the exporter's for GS_HANDLE_WIN32 / GS_HANDLE_FD */
+	uint64_t size;       /* allocation size in bytes; required for GS_HANDLE_WIN32 / GS_HANDLE_FD */
+	uint32_t num_planes; /* planes described by offsets/pitches (dmabuf, frame buffers); 0 otherwise */
+	uint32_t offsets[GS_SHARED_MAX_PLANES];
+	uint32_t pitches[GS_SHARED_MAX_PLANES];
+	uint64_t modifier;       /* dmabuf: DRM format modifier or GS_SHARED_MODIFIER_INVALID */
+	bool keyed_mutex;        /* D3D11 types: the texture has a keyed mutex (gs_texture_acquire_sync) */
+	uint8_t device_uuid[16]; /* exporter's gs_adapter_identity::device_uuid; all zero: not checked */
+};
+
+/* Identifies the adapter of the current device to other APIs and processes (Vulkan VkPhysicalDeviceIDProperties,
+ * CUDA cuDeviceGetUuid, DXGI EnumAdapterByLuid). */
+struct gs_adapter_identity {
+	uint8_t device_uuid[16];
+	uint8_t driver_uuid[16];
+	uint8_t luid[8];
+	bool luid_valid; /* Windows */
+	uint32_t vendor_id, device_id;
+};
+
+EXPORT bool gs_get_adapter_identity(struct gs_adapter_identity *identity);
+
+/* Whether textures of this layout and format can be imported from (import = true) or exported as (false) `type`.
+ * D3D11 NV12/P010 import is refused on NVIDIA (the driver places the chroma plane wrongly). */
+EXPORT bool gs_shared_texture_supported(enum gs_handle_type type, enum gs_shared_layout layout,
+					enum gs_color_format format, bool import);
+
+/* An exportable texture with a dedicated allocation. GS_SHARED_SINGLE creates one texture in *tex; NV12/P010 create
+ * the two plane views (as gs_texture_create_nv12) in *tex and *tex_uv. Destroy them with gs_texture_destroy. */
+EXPORT bool gs_texture_create_exportable(uint32_t width, uint32_t height, enum gs_color_format format,
+					 enum gs_shared_layout layout, uint32_t flags, gs_texture_t **tex,
+					 gs_texture_t **tex_uv);
+/* Exports a texture made by gs_texture_create_exportable (either plane view). On success desc holds a new handle
+ * of `type` that the caller owns and closes (gs_shared_handle_close on {type, win32, fds[0]}). */
+EXPORT bool gs_texture_export(gs_texture_t *tex, enum gs_handle_type type, struct gs_shared_texture_desc *desc);
+/* Imports memory described by desc. NV12/P010 fill *tex and *tex_uv (plane views), others *tex only. The texture
+ * keeps its own reference to the memory; the handle in desc stays the caller's. */
+EXPORT bool gs_texture_import(const struct gs_shared_texture_desc *desc, gs_texture_t **tex, gs_texture_t **tex_uv);
+
+/* Pitch-linear NV12/P010 frame in exportable GPU memory (NVENC takes it as CUDADEVICEPTR): Y rows, then UV rows,
+ * with the pitches and offsets gs_sharedbuf_export reports. */
+typedef struct gs_shared_buffer gs_sharedbuf_t;
+EXPORT gs_sharedbuf_t *gs_sharedbuf_create(uint32_t width, uint32_t height, enum gs_shared_layout layout);
+EXPORT void gs_sharedbuf_destroy(gs_sharedbuf_t *buf);
+/* Records a GPU copy of both planes of the NV12/P010 texture `tex_y` belongs to (same size and layout). */
+EXPORT bool gs_sharedbuf_copy_texture(gs_sharedbuf_t *buf, gs_texture_t *tex_y);
+EXPORT bool gs_sharedbuf_export(gs_sharedbuf_t *buf, enum gs_handle_type type, struct gs_shared_texture_desc *desc);
+
+/* Timeline semaphores. GPU signals and waits are ordered with this device's submissions; values only increase. */
+typedef struct gs_timeline gs_timeline_t;
+EXPORT gs_timeline_t *gs_timeline_create(uint64_t initial_value); /* exportable */
+EXPORT gs_timeline_t *gs_timeline_import(const struct gs_shared_handle *handle);
+/* A new handle the caller owns and closes. */
+EXPORT bool gs_timeline_export(gs_timeline_t *timeline, enum gs_handle_type type, struct gs_shared_handle *handle);
+EXPORT void gs_timeline_destroy(gs_timeline_t *timeline);
+/* Submits all work recorded so far and signals `value` once it has finished. */
+EXPORT bool gs_timeline_signal(gs_timeline_t *timeline, uint64_t value);
+/* Work recorded after this call waits on the GPU until the timeline reaches `value` (earlier work is submitted
+ * first and does not wait). */
+EXPORT bool gs_timeline_wait(gs_timeline_t *timeline, uint64_t value);
+EXPORT uint64_t gs_timeline_get_value(gs_timeline_t *timeline);
+/* Returns 0 when reached, ETIMEDOUT after timeout_ns, -1 on error. */
+EXPORT int gs_timeline_wait_cpu(gs_timeline_t *timeline, uint64_t value, uint64_t timeout_ns);
+EXPORT bool gs_timeline_signal_cpu(gs_timeline_t *timeline, uint64_t value);
+
+/* One-shot sync files (GS_HANDLE_SYNC_FD; Linux). export: a new sync file signalled once the work submitted so far
+ * has finished; wait: the next submission waits on it (the handle stays the caller's). */
+EXPORT bool gs_sync_file_export(struct gs_shared_handle *handle);
+EXPORT bool gs_sync_file_wait(const struct gs_shared_handle *handle);
+
 #define GS_USE_DEBUG_MARKERS 0
 #if GS_USE_DEBUG_MARKERS
 static const float GS_DEBUG_COLOR_DEFAULT[] = {0.5f, 0.5f, 0.5f, 1.0f};

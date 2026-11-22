@@ -232,6 +232,28 @@ bool load_graphics_imports(struct gs_exports *exports, void *module, const char 
 
 	GRAPHICS_IMPORT_OPTIONAL(gs_get_adapter_count);
 
+	/* External memory and synchronisation (docs/graphics-interop.md) */
+	GRAPHICS_IMPORT_OPTIONAL(device_get_adapter_identity);
+	GRAPHICS_IMPORT_OPTIONAL(device_shared_texture_supported);
+	GRAPHICS_IMPORT_OPTIONAL(device_texture_create_exportable);
+	GRAPHICS_IMPORT_OPTIONAL(device_texture_export);
+	GRAPHICS_IMPORT_OPTIONAL(device_texture_import);
+	GRAPHICS_IMPORT_OPTIONAL(device_sharedbuf_create);
+	GRAPHICS_IMPORT_OPTIONAL(gs_sharedbuf_destroy);
+	GRAPHICS_IMPORT_OPTIONAL(device_sharedbuf_copy_texture);
+	GRAPHICS_IMPORT_OPTIONAL(device_sharedbuf_export);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_create);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_import);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_export);
+	GRAPHICS_IMPORT_OPTIONAL(gs_timeline_destroy);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_signal);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_wait);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_get_value);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_wait_cpu);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_signal_cpu);
+	GRAPHICS_IMPORT_OPTIONAL(device_sync_file_export);
+	GRAPHICS_IMPORT_OPTIONAL(device_sync_file_wait);
+
 	/* OSX/Cocoa specific functions */
 #ifdef __APPLE__
 	GRAPHICS_IMPORT(device_shared_texture_available);
