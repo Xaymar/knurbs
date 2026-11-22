@@ -152,6 +152,10 @@ if(ENABLE_VULKAN)
     PRIVATE OBS_SOURCE_DIR="${CMAKE_SOURCE_DIR}" OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan"
   )
   add_dependencies(test_vulkan_exports libobs-vulkan)
+  if(TARGET libobs-null)
+    target_compile_definitions(test_vulkan_exports PRIVATE NULL_GRAPHICS_MODULE="$<TARGET_FILE:libobs-null>")
+    add_dependencies(test_vulkan_exports libobs-null)
+  endif()
   target_link_libraries(test_vulkan_exports PRIVATE OBS::libobs cmocka::cmocka)
   add_test(test_vulkan_exports test_vulkan_exports)
 
@@ -255,6 +259,21 @@ if(ENABLE_VULKAN)
   add_dependencies(test_vulkan_nv12 libobs-vulkan)
   target_link_libraries(test_vulkan_nv12 PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
   add_test(test_vulkan_nv12 test_vulkan_nv12)
+
+  if(OS_WINDOWS)
+    # External memory and sync (D3D11 import, keyed mutex, export/import across devices and processes); needs a
+    # device (skips without one).
+    add_executable(test_vulkan_interop test_vulkan_interop.cpp)
+    target_include_directories(test_vulkan_interop PRIVATE ${CMOCKA_INCLUDE_DIR})
+    target_compile_definitions(
+      test_vulkan_interop
+      PRIVATE OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan"
+    )
+    target_compile_features(test_vulkan_interop PRIVATE cxx_std_17)
+    add_dependencies(test_vulkan_interop libobs-vulkan)
+    target_link_libraries(test_vulkan_interop PRIVATE OBS::libobs cmocka::cmocka d3d11 dxgi)
+    add_test(test_vulkan_interop test_vulkan_interop)
+  endif()
 
   # Depth/stencil buffers and depth-tested drawing; needs a device (skips without one).
   add_executable(test_vulkan_depth test_vulkan_depth.cpp)
@@ -367,6 +386,14 @@ if(ENABLE_VULKAN)
       ENVIRONMENT "OBS_VULKAN_VALIDATION=1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
       SKIP_REGULAR_EXPRESSION "SKIPPED"
   )
+  if(OS_WINDOWS)
+    set_tests_properties(
+      test_vulkan_interop
+      PROPERTIES
+        ENVIRONMENT "OBS_VULKAN_VALIDATION=1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
+        SKIP_REGULAR_EXPRESSION "SKIPPED"
+    )
+  endif()
 endif()
 
 # OS path test
