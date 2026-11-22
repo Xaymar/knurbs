@@ -80,11 +80,15 @@ struct video_output {
 	volatile long total_frames;
 
 	pthread_mutex_t input_mutex;
+	/* threads waiting for input_mutex, see lock_inputs() */
+	volatile long input_waiters;
 	DARRAY(struct video_input) inputs;
 
 	size_t available_frames;
 	size_t first_added;
 	size_t last_added;
+	/* a frame from video_output_lock_frame() waits for video_output_unlock_frame() */
+	bool frame_locked;
 	struct cached_frame_info cache[MAX_CACHE_SIZE];
 
 	struct video_output *parent;
@@ -94,6 +98,23 @@ struct video_output {
 };
 
 /* ------------------------------------------------------------------------- */
+
+/* The video thread holds input_mutex while the inputs encode a frame. An encoder slower than the frame rate keeps
+ * the thread busy, and it takes the mutex again right after letting go of it, so mutexes that are not fair (most
+ * are) let a thread that connects or disconnects an input wait forever, which froze stopping an output. Other
+ * threads therefore announce that they wait, and the video thread lets them go first. */
+static void lock_inputs(struct video_output *video)
+{
+	os_atomic_inc_long(&video->input_waiters);
+	pthread_mutex_lock(&video->input_mutex);
+	os_atomic_dec_long(&video->input_waiters);
+}
+
+static void yield_to_input_waiters(struct video_output *video)
+{
+	while (os_atomic_load_long(&video->input_waiters) > 0)
+		os_sleep_ms(1);
+}
 
 static inline bool scale_video_output(struct video_input *input, struct video_data *data)
 {
@@ -139,6 +160,7 @@ static inline bool video_output_cur_frame(struct video_output *video)
 
 	/* -------------------------------- */
 
+	yield_to_input_waiters(video);
 	pthread_mutex_lock(&video->input_mutex);
 
 	for (size_t i = 0; i < video->inputs.num; i++) {
@@ -218,7 +240,8 @@ static void *video_thread(void *param)
 
 static inline bool valid_video_params(const struct video_output_info *info)
 {
-	return info->height != 0 && info->width != 0 && info->fps_den != 0 && info->fps_num != 0;
+	return info->height != 0 && info->width != 0 && info->fps_den != 0 && info->fps_num != 0 &&
+	       info->cache_size != 0;
 }
 
 static inline void init_cache(struct video_output *video)
@@ -400,12 +423,12 @@ bool video_output_connect2(video_t *video, const struct video_scale_info *conver
 {
 	bool success = false;
 
-	video = get_root(video);
-
 	if (!video || !callback || frame_rate_divisor == 0)
 		return false;
 
-	pthread_mutex_lock(&video->input_mutex);
+	video = get_root(video);
+
+	lock_inputs(video);
 
 	if (video_get_input_idx(video, callback, param) == DARRAY_INVALID) {
 		struct video_input input;
@@ -474,7 +497,7 @@ bool video_output_disconnect2(video_t *video, void (*callback)(void *param, stru
 
 	video = get_root(video);
 
-	pthread_mutex_lock(&video->input_mutex);
+	lock_inputs(video);
 
 	size_t idx = video_get_input_idx(video, callback, param);
 	if (idx != DARRAY_INVALID) {
@@ -537,6 +560,7 @@ bool video_output_lock_frame(video_t *video, struct video_frame *frame, int coun
 		memcpy(frame, &cfi->frame, sizeof(*frame));
 
 		locked = true;
+		video->frame_locked = true;
 	}
 
 	pthread_mutex_unlock(&video->data_mutex);
@@ -553,8 +577,12 @@ void video_output_unlock_frame(video_t *video)
 
 	pthread_mutex_lock(&video->data_mutex);
 
-	video->available_frames--;
-	os_sem_post(video->update_semaphore);
+	/* without a locked frame there is nothing to hand to the video thread */
+	if (video->frame_locked) {
+		video->frame_locked = false;
+		video->available_frames--;
+		os_sem_post(video->update_semaphore);
+	}
 
 	pthread_mutex_unlock(&video->data_mutex);
 }
@@ -608,19 +636,18 @@ double video_output_get_frame_rate(const video_t *video)
 	if (!video)
 		return 0.0;
 
-	video = get_const_root(video);
-
+	/* not the root: a frame rate divisor output has its own fps_den */
 	return (double)video->info.fps_num / (double)video->info.fps_den;
 }
 
 uint32_t video_output_get_skipped_frames(const video_t *video)
 {
-	return (uint32_t)os_atomic_load_long(&get_const_root(video)->skipped_frames);
+	return video ? (uint32_t)os_atomic_load_long(&get_const_root(video)->skipped_frames) : 0;
 }
 
 uint32_t video_output_get_total_frames(const video_t *video)
 {
-	return (uint32_t)os_atomic_load_long(&get_const_root(video)->total_frames);
+	return video ? (uint32_t)os_atomic_load_long(&get_const_root(video)->total_frames) : 0;
 }
 
 /* Note: These four functions below are a very slight bit of a hack.  If the
@@ -668,6 +695,7 @@ video_t *video_output_create_with_frame_rate_divisor(video_t *video, uint32_t di
 	memcpy(new_video, video, sizeof(*new_video));
 	new_video->parent = video;
 	new_video->info.fps_den *= divisor;
+	new_video->frame_time *= divisor;
 
 	return new_video;
 }
