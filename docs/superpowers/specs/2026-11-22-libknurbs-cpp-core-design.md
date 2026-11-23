@@ -574,6 +574,24 @@ builder keeps a list of what was checked.
   virtual functions with a version check, or a new interface for larger
   additions.
 
+## Open questions
+
+- **Plugin UI once plugins run out of process** (raised by Xaymar,
+  2026-11-23). Qt isn't built for widgets that live in more than one process,
+  so a plugin in its own process can't hand Qt widgets to the frontend, and
+  remoting every Qt call over IPC would be chaotic. Likely direction, to be
+  settled with Xaymar:
+  - **Declarative UI is the default.** The plugin describes its settings as
+    `properties` and the frontend renders them with its own widgets. This
+    already crosses datapath as data and covers most sources, filters and
+    encoders.
+  - **Custom UI is the exception, in one of two forms.** Either the plugin
+    owns a top-level window in its own process, which the frontend only opens
+    and closes, or the plugin renders into a shared texture that the frontend
+    embeds and forwards input to.
+  - Frontend plugins (docks, tools) are the hardest case, because they would
+    want to live inside the frontend's widget tree.
+
 ## Left to the builder
 
 - The exact layer boundaries within each numbered layer, and the order of the
