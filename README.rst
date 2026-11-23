@@ -2,11 +2,14 @@ Knurbs
 ======
 
 Knurbs is a fork of `OBS Studio <https://github.com/obsproject/obs-studio>`_
-for capturing, compositing, encoding, recording and streaming video. It
+for capturing, compositing, encoding, recording and streaming video. It aims
+to be the most stable and fastest way to stream and record, with a minimum
+set of features that is guaranteed to work on every supported platform. It
 focuses on three things:
 
 - **Stability**: fix the common pitfalls in how libobs works, and back every
-  fix with a regression test.
+  fix with a regression test. Development is test and coverage driven, so
+  bugs are caught early, often before they reach a release.
 - **Performance**: fewer copies, fewer locks, less work per frame.
 - **Unification across platforms**: the same features, behaving the same
   way, on every supported platform.
@@ -18,6 +21,19 @@ Knurbs is an independent project. It is not OBS Studio, is not made by or
 affiliated with the OBS Project, and is not supported by it. Please do not
 report Knurbs issues to the OBS Project.
 
+Knurbs is **not compatible** with anything built for OBS Studio: plugins,
+scripts, themes, profiles, scene collections and other setups are not
+expected to work. The initial release will not load OBS Studio plugins,
+because Knurbs' core and API differ too much. A compatibility layer may
+follow later, without guarantees (see Direction). Knurbs is under heavy
+development and not ready for production use.
+
+Platforms
+---------
+
+Knurbs targets Windows, Linux and macOS. The first goal is a fully working
+Windows and Linux build; macOS follows after that.
+
 Community
 ---------
 
@@ -25,10 +41,8 @@ Questions, help and discussion happen on the
 `Knurbs Discord server <https://discord.gg/X2cMgYeA9q>`_. Bugs and feature
 requests go to the `issue tracker <https://github.com/Xaymar/knurbs/issues>`_.
 
-For now, Knurbs is **not compatible** with anything built for OBS Studio:
-plugins, scripts, themes, profiles, scene collections and other setups are
-not expected to work, and this will likely stay that way for months. Knurbs
-is under heavy development and not ready for production use.
+Knurbs is free. It is funded entirely by backers and sponsors on
+`Patreon <https://patreon.com/xaymar/join>`_.
 
 Direction
 ---------
@@ -52,9 +66,10 @@ These are goals, not promises, and none of them has a date:
   every object made reference counted. Installed headers already live under
   ``<prefix>/include/knurbs/``.
 - **Legacy OBS plugins, later.** Plugins built for OBS Studio may run again
-  one day by isolating them in their own process (see
-  `datapath <https://github.com/Xaymar/datapath>`_), rather than through
-  source or binary compatibility.
+  one day through a compatibility layer that isolates them in their own
+  process (see `datapath <https://github.com/Xaymar/datapath>`_), rather
+  than through source or binary compatibility. There is no guarantee that
+  this happens.
 
 Naming
 ------
@@ -80,6 +95,9 @@ Issues and pull requests go to
 branch. Code style is defined by ``.clang-format``, ``.swift-format`` and
 ``.gersemirc``; see ``CONTRIBUTING.md``. Bug fixes come in their own commit
 with a regression test.
+
+Knurbs is an AI assisted project and welcomes contributions made with AI
+tools, as long as they are tested; see ``CONTRIBUTING.md``.
 
 Licence and attribution
 -----------------------
