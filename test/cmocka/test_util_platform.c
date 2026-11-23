@@ -132,6 +132,26 @@ static void conversion_test(void **state)
 	assert_int_equal(os_wcs_to_utf8_ptr(NULL, 0, &ptr), 0);
 	assert_null(ptr);
 
+	/* Regression: text the current locale cannot convert ((size_t)-1 from mbstowcs/wcstombs) made the *_ptr
+	 * helpers allocate 0 bytes, which crashes. Whether it converts depends on the locale and platform; the
+	 * result is always a terminated string of the returned length. */
+	size_t n = os_mbs_to_wcs_ptr("\xff", 0, &wptr);
+	assert_non_null(wptr);
+	assert_int_equal(wcslen(wptr), n);
+	bfree(wptr);
+	n = os_wcs_to_mbs_ptr(L"\x20ac", 0, &ptr);
+	assert_non_null(ptr);
+	assert_int_equal(strlen(ptr), n);
+	bfree(ptr);
+	n = os_mbs_to_utf8_ptr("\xff", 0, &ptr);
+	assert_non_null(ptr);
+	assert_int_equal(strlen(ptr), n);
+	bfree(ptr);
+	n = os_mbs_to_wcs("\xff", 0, wide, 16);
+	assert_int_equal(wcslen(wide), n);
+	n = os_wcs_to_mbs(L"\x20ac", 0, back, 16);
+	assert_int_equal(strlen(back), n);
+
 	assert_int_equal(os_mbs_to_wcs("abc", 0, wide, 16), 3);
 	assert_int_equal(os_wcs_to_mbs(L"abc", 0, back, 16), 3);
 	assert_string_equal(back, "abc");
