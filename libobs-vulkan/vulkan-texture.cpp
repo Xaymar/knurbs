@@ -193,6 +193,7 @@ static void destroy_texture_objects(gs_device *d, gs_texture *tex)
 			if (t.memory) {
 				vkFreeMemory(dev, t.memory, nullptr);
 			}
+			vk_interop_close_fd(t.dmabuf_fd);
 		}
 	});
 }
@@ -1033,7 +1034,9 @@ void vk_texture_release(gs_device *d, gs_texture *t)
 		if (t->memory) {
 			vkFreeMemory(d->dev, t->memory, nullptr);
 		}
+		vk_interop_close_fd(t->dmabuf_fd);
 	}
+	t->dmabuf_fd = -1;
 	if (t->km_probe) {
 		vk_interop_release(t->km_probe);
 		t->km_probe = nullptr;

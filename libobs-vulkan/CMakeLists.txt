@@ -58,6 +58,9 @@ else()
   # The module exports gs_* under the same names as libobs. Without -Bsymbolic its internal calls (e.g.
   # gs_shader_set_val from device_draw) bind to libobs's wrappers, which drop them outside a graphics context.
   target_link_options(libobs-vulkan PRIVATE LINKER:--no-undefined LINKER:-Bsymbolic)
+  # Linux interop (vulkan-interop.cpp): DRM fourccs and syncobjs from libdrm; GBM is loaded at run time (gbm.h only).
+  find_package(Libdrm REQUIRED)
+  target_link_libraries(libobs-vulkan PRIVATE Libdrm::Libdrm ${CMAKE_DL_LIBS})
 endif()
 
 # Windows delay-loads the loader so a machine without vulkan-1.dll still loads the module and device_create

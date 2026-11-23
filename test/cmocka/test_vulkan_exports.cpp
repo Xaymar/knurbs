@@ -124,7 +124,7 @@ static void test_optional_not_exported(void **)
 	for (auto &name : names) {
 		// Implemented for real (Task 2; NV12/P010 and the Windows interop in phase 2; device loss and fast clear in
 		// phase 2 step 3), so exporting them is
-		// correct. The sync_file pair is Linux-only and not yet implemented there.
+		// correct. The sync_file pair is Linux-only.
 		static const char *implemented[] = {
 			"device_enum_adapters",
 			"gpu_get_driver_version",
@@ -156,6 +156,10 @@ static void test_optional_not_exported(void **)
 			"device_register_loss_callbacks",
 			"device_unregister_loss_callbacks",
 			"device_can_adapter_fast_clear",
+#ifndef _WIN32
+			"device_sync_file_export",
+			"device_sync_file_wait",
+#endif
 #ifdef _WIN32
 			"device_texture_open_shared",
 			"device_texture_open_nt_shared",

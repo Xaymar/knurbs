@@ -275,6 +275,30 @@ if(ENABLE_VULKAN)
     add_test(test_vulkan_interop test_vulkan_interop)
   endif()
 
+  if(OS_LINUX)
+    # Linux external memory and sync (dmabufs, GBM, opaque fds, sync_files, DRM syncobjs, SCM_RIGHTS to a child);
+    # needs a device (skips without one).
+    find_package(Libdrm REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GBM REQUIRED IMPORTED_TARGET gbm)
+    add_executable(test_vulkan_interop_linux test_vulkan_interop_linux.cpp)
+    target_include_directories(test_vulkan_interop_linux PRIVATE ${CMOCKA_INCLUDE_DIR})
+    target_compile_definitions(
+      test_vulkan_interop_linux
+      PRIVATE OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan"
+    )
+    target_compile_features(test_vulkan_interop_linux PRIVATE cxx_std_17)
+    add_dependencies(test_vulkan_interop_linux libobs-vulkan)
+    target_link_libraries(test_vulkan_interop_linux PRIVATE OBS::libobs cmocka::cmocka Libdrm::Libdrm PkgConfig::GBM)
+    add_test(test_vulkan_interop_linux test_vulkan_interop_linux)
+    set_tests_properties(
+      test_vulkan_interop_linux
+      PROPERTIES
+        ENVIRONMENT "OBS_VULKAN_VALIDATION=1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
+        SKIP_REGULAR_EXPRESSION "SKIPPED"
+    )
+  endif()
+
   # Depth/stencil buffers and depth-tested drawing; needs a device (skips without one).
   add_executable(test_vulkan_depth test_vulkan_depth.cpp)
   target_include_directories(test_vulkan_depth PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan)

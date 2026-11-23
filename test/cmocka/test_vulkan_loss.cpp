@@ -14,6 +14,9 @@
 #include <vector>
 
 #include <graphics/graphics.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #include <graphics/graphics-vulkan.h>
 #include <graphics/vec3.h>
 #include <graphics/vec4.h>
@@ -391,10 +394,19 @@ static void test_loss_rebuilds_every_object(void **)
 	if (exportable) {
 		assert_int_equal(exp->origin, gs_texture::ORIGIN_EXPORTABLE);
 		gs_shared_texture_desc desc;
+#ifdef _WIN32
 		assert_true(texture_export(d, exp, GS_HANDLE_WIN32, &desc));
 		assert_non_null(desc.win32);
-#ifdef _WIN32
 		CloseHandle((HANDLE)desc.win32);
+#else
+		// Linux: single-plane exportable textures are dmabufs (docs/graphics-interop.md).
+		assert_true(texture_export(d, exp, GS_HANDLE_DMABUF, &desc));
+		assert_true(desc.fds[0] >= 0);
+		for (int fd : desc.fds) {
+			if (fd >= 0) {
+				close(fd);
+			}
+		}
 #endif
 	}
 	// The timeline carries on from its last value.
