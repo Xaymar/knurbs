@@ -141,7 +141,8 @@ bool obs_module_load(void)
 	if (graphics_uses_winrt)
 		wgc_supported = win_version_compare(&ver, &win1903) >= 0;
 
-	if (win8_or_above && graphics_uses_d3d11)
+	/* DXGI duplication: libobs's gs_duplicator on D3D11, dxgi-duplicator.cpp on Vulkan */
+	if (win8_or_above && (graphics_uses_d3d11 || device_type == GS_DEVICE_VULKAN))
 		obs_register_source(&duplicator_capture_info);
 	else
 		obs_register_source(&monitor_capture_info);

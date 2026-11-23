@@ -17,6 +17,10 @@ if(NOT TARGET OBS::ipc-util)
   add_subdirectory("${CMAKE_SOURCE_DIR}/shared/ipc-util" "${CMAKE_BINARY_DIR}/shared/ipc-util")
 endif()
 
+if(NOT TARGET OBS::d3d11-vulkan-bridge)
+  add_subdirectory("${CMAKE_SOURCE_DIR}/shared/d3d11-vulkan-bridge" "${CMAKE_BINARY_DIR}/shared/d3d11-vulkan-bridge")
+endif()
+
 if(NOT TARGET OBS::file-updater)
   add_subdirectory("${CMAKE_SOURCE_DIR}/shared/file-updater" "${CMAKE_BINARY_DIR}/shared/file-updater")
 endif()
@@ -41,6 +45,8 @@ target_sources(
     dc-capture.c
     dc-capture.h
     duplicator-monitor-capture.c
+    dxgi-duplicator.cpp
+    dxgi-duplicator.h
     game-capture-file-init.c
     game-capture.c
     load-graphics-offsets.c
@@ -62,6 +68,7 @@ target_compile_definitions(
 target_link_libraries(
   win-capture
   PRIVATE
+    OBS::d3d11-vulkan-bridge
     OBS::file-updater
     OBS::hook-config
     OBS::inject-library
