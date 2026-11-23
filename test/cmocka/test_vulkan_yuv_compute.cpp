@@ -33,6 +33,7 @@ static gs_effect_t *effect;
 static bool (*convert_buffer)(gs_texture_t *, const struct gs_yuv_conversion *, uint32_t, bool, void *, uint64_t,
 			      uint32_t *);
 static bool (*read_sharedbuf)(gs_sharedbuf_t *, void *, uint64_t);
+static int (*messages)(void);
 
 static int setup(void **)
 {
@@ -42,7 +43,8 @@ static int setup(void **)
 	}
 	convert_buffer = (decltype(convert_buffer))os_dlsym(module, "obs_vulkan_test_convert_yuv_buffer");
 	read_sharedbuf = (decltype(read_sharedbuf))os_dlsym(module, "obs_vulkan_test_read_sharedbuf");
-	return convert_buffer && read_sharedbuf ? 0 : -1;
+	messages = (decltype(messages))os_dlsym(module, "obs_vulkan_validation_messages");
+	return convert_buffer && read_sharedbuf && messages ? 0 : -1;
 }
 
 static int teardown(void **)
@@ -81,6 +83,18 @@ static void close_graphics()
 	gs_effect_destroy(effect);
 	gs_leave_context();
 	gs_destroy(graphics);
+	// Under the validation layer (with synchronization validation from ctest) the conversions, their barriers and
+	// the frame buffer reads must report nothing.
+	const int n = messages();
+	if (n < 0) {
+		const char *rq = getenv("OBS_VULKAN_REQUIRE_VALIDATION");
+		if (rq && !strcmp(rq, "1")) {
+			fail_msg("validation layer required (OBS_VULKAN_REQUIRE_VALIDATION=1) but missing");
+		}
+		print_message("validation layer missing, not checked\n");
+	} else {
+		assert_int_equal(n, 0);
+	}
 }
 
 /* ---- cases ---- */

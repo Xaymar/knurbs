@@ -189,7 +189,8 @@ static void probe(void **)
 	VkDebugUtilsMessengerCreateInfoEXT mi = {VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
 	mi.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
 			     VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-	mi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
+	// Validation findings only: GENERAL carries loader notices (e.g. a registry lookup for layer manifests).
+	mi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
 	mi.pfnUserCallback = on_message;
 	VkInstanceCreateInfo ici = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, validation ? &mi : nullptr};
 	ici.pApplicationInfo = &app;
