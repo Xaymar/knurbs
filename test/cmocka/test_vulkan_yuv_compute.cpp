@@ -409,7 +409,11 @@ static void compare_paths(void **)
 				gs_sharedbuf_t *buf = gs_sharedbuf_create(s.w, s.h, layout);
 				if (buf) {
 					struct gs_shared_texture_desc desc = {};
+					#ifdef _WIN32
 					assert_true(gs_sharedbuf_export(buf, GS_HANDLE_WIN32, &desc));
+#else
+					assert_true(gs_sharedbuf_export(buf, GS_HANDLE_FD, &desc));
+#endif
 					struct gs_shared_handle hd = {desc.type, desc.win32, desc.fds[0]};
 					gs_shared_handle_close(&hd);
 					assert_true(gs_sharedbuf_convert(buf, src, &conv));
