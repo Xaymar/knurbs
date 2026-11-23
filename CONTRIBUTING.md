@@ -3,16 +3,21 @@ Contributing to Knurbs
 
 Knurbs accepts contributions as pull requests on
 [Xaymar/knurbs](https://github.com/Xaymar/knurbs), against the `root` branch.
+Knurbs is an AI assisted project and welcomes tested contributions made with
+AI tools; see [AI assisted contributions](#ai-assisted-contributions).
 Bugs and feature requests go to the
 [issue tracker](https://github.com/Xaymar/knurbs/issues) there, and security
-issues go through the [security policy](SECURITY.md).
+issues go through the [security policy](SECURITY.md). For questions, help and
+discussion, join the [Knurbs Discord server](https://discord.gg/X2cMgYeA9q).
 
 Knurbs is not OBS Studio. Please do not send Knurbs issues or pull requests to
 the OBS Project, and do not send OBS Studio issues here.
 
 Knurbs is under heavy development and changes direction quickly. If you plan a
 larger change, open an issue first, so we can check that it fits where the
-project is going (see the [README](README.rst)).
+project is going (see the [README](README.rst)). The
+[Discord server](https://discord.gg/X2cMgYeA9q) is a good place to talk it
+through first.
 
 ## What we look for
 
@@ -44,10 +49,18 @@ settings.
 
 ## Code style
 
-Code style is defined by the formatter configurations in the repository root:
-`.clang-format` for C, C++, Objective-C and Objective-C++, `.swift-format` for
-Swift and `.gersemirc` for CMake. Run the matching formatter before you commit;
-the scripts in `build-aux` do that for you, and CI checks it.
+Code style is defined by formatter configurations. New Knurbs code
+(`libknurbs/`, `knurbs-frontend/`, `plugins/knurbs-*/`) uses the Knurbs style,
+derived from StreamFX: 4-wide tabs, left-aligned pointers (`int* p`), indented
+namespaces and aligned declarations. It lives in a `.clang-format` inside each
+of those directories; a new `knurbs-*` plugin copies it. Code inherited
+from OBS Studio keeps the root `.clang-format`, so upstream fixes still merge
+cleanly. `.swift-format` covers Swift and `.gersemirc` covers CMake.
+
+Formatting is a convenience, not a requirement: CI does not check it, and a pull
+request is never rejected over style. Run the formatter if you like; the
+scripts in `build-aux` do that for you. Do not reformat code you are not
+otherwise changing.
 
 ## Commits
 
@@ -91,12 +104,13 @@ commits had to be rewritten.
 
 ## AI assisted contributions
 
-Contributions made with the help of AI tools are welcome, on the same terms as
-any other: you are responsible for the change. Review and understand
-everything you submit, make sure it is tested, and make sure it does not copy
-code under an incompatible licence. Credit the tool with a `Co-Authored-By:`
-trailer that names it and its model. Unreviewed, low effort submissions will be
-closed.
+Knurbs is an AI assisted project: it is developed with the help of AI tools,
+and contributions made with AI are welcome as long as they are tested. They
+are held to the same terms as any other contribution: you are responsible for
+the change. Review and understand everything you submit, make sure it is
+tested, and make sure it does not copy code under an incompatible licence.
+Credit the tool with a `Co-Authored-By:` trailer that names it and its model.
+Unreviewed, low effort submissions will be closed.
 
 ## Licence
 

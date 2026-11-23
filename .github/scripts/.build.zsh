@@ -48,6 +48,7 @@ build() {
 
   local target
   local -r -a _valid_targets=(
+    macos-universal
     macos-x86_64
     macos-arm64
     ubuntu-x86_64
@@ -117,9 +118,12 @@ build() {
 
   case ${target} {
     macos-*)
+      local osx_architectures=${target##*-}
+      if [[ ${osx_architectures} == universal ]] osx_architectures='arm64;x86_64'
+
       cmake_args+=(
         --preset 'macos-ci'
-        -DCMAKE_OSX_ARCHITECTURES:STRING=${target##*-}
+        -DCMAKE_OSX_ARCHITECTURES:STRING=${osx_architectures}
       )
 
       if (( debug )) {

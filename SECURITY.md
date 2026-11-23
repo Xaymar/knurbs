@@ -18,7 +18,8 @@ Reporting a vulnerability
 Report vulnerabilities privately through GitHub's
 [private vulnerability reporting](https://github.com/Xaymar/knurbs/security/advisories/new)
 on [Xaymar/knurbs](https://github.com/Xaymar/knurbs). Please do **not** open a
-public issue or pull request for a vulnerability until it has been fixed.
+public issue or pull request for a vulnerability, or discuss it on the
+[Discord server](https://discord.gg/X2cMgYeA9q), until it has been fixed.
 
 A good report contains:
 
