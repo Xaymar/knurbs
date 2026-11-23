@@ -61,6 +61,16 @@ static void read_pipe_test(void **state)
 	/* a read pipe cannot be written to */
 	assert_int_equal(os_process_pipe_write(pp, (const uint8_t *)"x", 1), 0);
 	assert_int_equal(os_process_pipe_destroy(pp), 3);
+
+	/* Regression: exit codes above 127 read as negative, as a negative exit code does on Windows. They
+	 * were positive on platforms where char is unsigned. */
+#ifdef _WIN32
+	pp = os_process_pipe_create("cmd.exe /c exit -2", "r");
+#else
+	pp = os_process_pipe_create("exit 254", "r");
+#endif
+	assert_non_null(pp);
+	assert_int_equal(os_process_pipe_destroy(pp), -2);
 }
 
 static void write_pipe_test(void **state)

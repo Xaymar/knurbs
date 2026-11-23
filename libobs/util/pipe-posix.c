@@ -163,7 +163,7 @@ int os_process_pipe_destroy(os_process_pipe_t *pp)
 
 		/* a process that did not exit on its own (killed by a signal) has no exit code */
 		if (waited == pp->pid && WIFEXITED(status))
-			ret = (int)(char)WEXITSTATUS(status);
+			ret = (int)(signed char)WEXITSTATUS(status);
 		else
 			ret = -1;
 		bfree(pp);
