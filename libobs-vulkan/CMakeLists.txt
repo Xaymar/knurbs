@@ -75,6 +75,7 @@ set_target_properties_obs(
   libobs-vulkan
   PROPERTIES FOLDER core
              VERSION 0
+             PREFIX ""
              SOVERSION ${OBS_VERSION_MAJOR}
              COMPILE_WARNING_AS_ERROR FALSE
 )
