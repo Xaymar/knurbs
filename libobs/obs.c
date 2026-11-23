@@ -176,14 +176,11 @@ static bool obs_init_gpu_conversion(struct obs_core_video_mix *video)
 	video->convert_textures_encode[0] = NULL;
 	video->convert_textures_encode[1] = NULL;
 	video->convert_textures_encode[2] = NULL;
-	if (video->using_nv12_tex) {
-		if (!gs_texture_create_nv12(&video->convert_textures_encode[0], &video->convert_textures_encode[1],
-					    info->width, info->height, GS_RENDER_TARGET | GS_SHARED_KM_TEX)) {
-			return false;
-		}
-	} else if (video->using_p010_tex) {
-		if (!gs_texture_create_p010(&video->convert_textures_encode[0], &video->convert_textures_encode[1],
-					    info->width, info->height, GS_RENDER_TARGET | GS_SHARED_KM_TEX)) {
+	/* These swap with the encoder frames (obs-video.c queue_frame), so they are made the same way. */
+	if (video->using_nv12_tex || video->using_p010_tex) {
+		if (!gpu_encode_create_textures(video, &video->convert_textures_encode[0],
+						&video->convert_textures_encode[1], info->width, info->height,
+						!video->using_nv12_tex)) {
 			return false;
 		}
 	}
@@ -3273,6 +3270,13 @@ bool start_gpu_encode(obs_encoder_t *encoder)
 	if (!video->gpu_encoders.num)
 		success = init_gpu_encoding(video);
 	if (success) {
+		/* Vulkan: encoders that take frames as handles get a release timeline of their own (without one,
+		 * encoder_texture::shared stays NULL and such an encoder fails its encode) */
+		if (video->gpu_encode_shared && (encoder->info.caps & OBS_ENCODER_CAP_SHARED_HANDLES)) {
+			encoder->gpu_release = gpu_encode_release_create();
+			if (encoder->gpu_release && (encoder->info.caps & OBS_ENCODER_CAP_SHARED_BUFFER))
+				video->gpu_encode_buffer_users++;
+		}
 		os_atomic_set_bool(&encoder->gpu_encode_failed, false);
 		da_push_back(video->gpu_encoders, &encoder);
 	} else {
@@ -3305,6 +3309,19 @@ void stop_gpu_encode(obs_encoder_t *encoder)
 	pthread_mutex_unlock(&video->gpu_encoder_mutex);
 
 	os_event_wait(video->gpu_encode_inactive);
+
+	/* The GPU encode thread is idle and no longer sees this encoder: frames it still holds stop counting. */
+	if (encoder->gpu_release) {
+		obs_enter_graphics();
+		pthread_mutex_lock(&video->gpu_encoder_mutex);
+		if (encoder->info.caps & OBS_ENCODER_CAP_SHARED_BUFFER)
+			video->gpu_encode_buffer_users--;
+		os_atomic_set_bool(&encoder->gpu_release->stopped, true);
+		gpu_encode_release_unref(encoder->gpu_release);
+		encoder->gpu_release = NULL;
+		pthread_mutex_unlock(&video->gpu_encoder_mutex);
+		obs_leave_graphics();
+	}
 
 	if (call_free) {
 		stop_gpu_encoding_thread(video);

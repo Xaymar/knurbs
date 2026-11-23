@@ -253,6 +253,135 @@ static void colour_image_default_aspect_unchanged(void **)
 	assert_int_equal(b.images[0].subresourceRange.aspectMask, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
+/* ---- External resources (interop) ---- */
+
+static void external_first_use_acquires_from_external_in_general(void **)
+{
+	vk_tracker t;
+	t.set_external(IMG(7), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+	vk_barriers b;
+	t.use_image(IMG(7), 3, sample, b);
+	assert_int_equal(b.images.size(), 1);
+	const VkImageMemoryBarrier2 &a = b.images[0];
+	assert_int_equal(a.srcQueueFamilyIndex, VK_QUEUE_FAMILY_EXTERNAL);
+	assert_int_equal(a.dstQueueFamilyIndex, 3);
+	assert_int_equal(a.oldLayout, VK_IMAGE_LAYOUT_GENERAL); // contents kept
+	assert_int_equal(a.newLayout, sample.layout);
+	assert_int_equal(a.srcStageMask, VK_PIPELINE_STAGE_2_NONE);
+	// Later reads in this submission need nothing more.
+	b = {};
+	t.use_image(IMG(7), 3, sample, b);
+	assert_true(b.images.empty());
+}
+
+static void external_release_returns_acquired_ones_in_general(void **)
+{
+	vk_tracker t;
+	t.set_external(IMG(7), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+	t.set_external(IMG(8), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL); // never used: not released
+	vk_barriers b;
+	t.use_image(IMG(7), 3, render, b);
+	b = {};
+	t.release_external(3, b);
+	assert_int_equal(b.images.size(), 1);
+	const VkImageMemoryBarrier2 &r = b.images[0];
+	assert_true(r.image == IMG(7));
+	assert_int_equal(r.srcQueueFamilyIndex, 3);
+	assert_int_equal(r.dstQueueFamilyIndex, VK_QUEUE_FAMILY_EXTERNAL);
+	assert_int_equal(r.oldLayout, render.layout);
+	assert_int_equal(r.newLayout, VK_IMAGE_LAYOUT_GENERAL);
+	assert_int_equal(r.srcAccessMask, render.access);
+	// The next submission acquires again; a second release without use emits nothing.
+	b = {};
+	t.release_external(3, b);
+	assert_true(b.images.empty());
+	t.use_image(IMG(7), 3, sample, b);
+	assert_int_equal(b.images.size(), 1);
+	assert_int_equal(b.images[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_EXTERNAL);
+	assert_int_equal(b.images[0].oldLayout, VK_IMAGE_LAYOUT_GENERAL);
+}
+
+static void external_buffer_acquire_and_release(void **)
+{
+	vk_tracker t;
+	t.set_external(BUF(9));
+	const vk_access copy_write = {VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+				      VK_IMAGE_LAYOUT_UNDEFINED};
+	vk_barriers b;
+	t.use_buffer(BUF(9), 2, copy_write, b);
+	assert_int_equal(b.buffers.size(), 1);
+	assert_int_equal(b.buffers[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_EXTERNAL);
+	b = {};
+	t.release_external(2, b);
+	assert_int_equal(b.buffers.size(), 1);
+	assert_int_equal(b.buffers[0].dstQueueFamilyIndex, VK_QUEUE_FAMILY_EXTERNAL);
+	assert_int_equal(b.buffers[0].srcAccessMask, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+}
+
+static void reset_keeps_external_resources_released(void **)
+{
+	vk_tracker t;
+	t.set_external(IMG(7), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+	vk_barriers b;
+	t.use_image(IMG(1), 0, render, b);
+	t.use_image(IMG(7), 0, render, b);
+	t.reset(); // a failed submission
+	b = {};
+	t.release_external(0, b);
+	assert_true(b.images.empty()); // nothing is owned any more
+	t.use_image(IMG(1), 0, sample, b);
+	t.use_image(IMG(7), 0, sample, b);
+	assert_int_equal(b.images.size(), 2);
+	assert_int_equal(b.images[0].oldLayout, VK_IMAGE_LAYOUT_UNDEFINED); // ordinary: forgotten
+	assert_int_equal(b.images[1].srcQueueFamilyIndex, VK_QUEUE_FAMILY_EXTERNAL);
+	assert_int_equal(b.images[1].oldLayout, VK_IMAGE_LAYOUT_GENERAL);
+}
+
+static void forget_drops_acquired_external(void **)
+{
+	vk_tracker t;
+	t.set_external(IMG(7), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+	vk_barriers b;
+	t.use_image(IMG(7), 0, sample, b);
+	t.forget(IMG(7)); // destroyed mid-submission
+	b = {};
+	t.release_external(0, b);
+	assert_true(b.images.empty());
+}
+
+// dmabufs belong to VK_QUEUE_FAMILY_FOREIGN_EXT between submissions: acquire, release and a reset keep that owner.
+static void foreign_owner_is_kept_for_acquire_release_and_reset(void **)
+{
+	vk_tracker t;
+	t.set_external(IMG(7), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	t.set_external(BUF(9), VK_QUEUE_FAMILY_FOREIGN_EXT);
+	const vk_access copy_write = {VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+				      VK_IMAGE_LAYOUT_UNDEFINED};
+	vk_barriers b;
+	t.use_image(IMG(7), 3, render, b);
+	t.use_buffer(BUF(9), 3, copy_write, b);
+	assert_int_equal(b.images.size(), 1);
+	assert_int_equal(b.buffers.size(), 1);
+	assert_int_equal(b.images[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	assert_int_equal(b.buffers[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	b = {};
+	t.release_external(3, b);
+	assert_int_equal(b.images.size(), 1);
+	assert_int_equal(b.buffers.size(), 1);
+	assert_int_equal(b.images[0].dstQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	assert_int_equal(b.buffers[0].dstQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	// Acquired again after the release, then a failed submission: still foreign.
+	b = {};
+	t.use_image(IMG(7), 3, sample, b);
+	assert_int_equal(b.images[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	t.reset();
+	b = {};
+	t.use_image(IMG(7), 3, sample, b);
+	t.use_buffer(BUF(9), 3, copy_write, b);
+	assert_int_equal(b.images[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	assert_int_equal(b.buffers[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+}
+
 int main()
 {
 	const struct CMUnitTest tests[] = {
@@ -271,6 +400,12 @@ int main()
 		cmocka_unit_test(depth_image_barrier_uses_depth_aspect),
 		cmocka_unit_test(depth_stencil_image_barrier_uses_both_aspects),
 		cmocka_unit_test(colour_image_default_aspect_unchanged),
+		cmocka_unit_test(external_first_use_acquires_from_external_in_general),
+		cmocka_unit_test(external_release_returns_acquired_ones_in_general),
+		cmocka_unit_test(external_buffer_acquire_and_release),
+		cmocka_unit_test(reset_keeps_external_resources_released),
+		cmocka_unit_test(foreign_owner_is_kept_for_acquire_release_and_reset),
+		cmocka_unit_test(forget_drops_acquired_external),
 	};
 	return cmocka_run_group_tests(tests, NULL, NULL);
 }

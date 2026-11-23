@@ -184,6 +184,7 @@ EXPORT gs_vertbuffer_t *device_vertexbuffer_create(gs_device_t *device, struct g
 		}
 		vb->attrs.push_back(b);
 	}
+	device->objects.vertex_buffers.insert(vb);
 	return vb;
 }
 
@@ -193,6 +194,7 @@ EXPORT void gs_vertexbuffer_destroy(gs_vertbuffer_t *vertbuffer)
 		return;
 	}
 	gs_device *d = vertbuffer->device;
+	d->objects.vertex_buffers.erase(vertbuffer);
 	if (d->cur_vb == vertbuffer) {
 		d->cur_vb = nullptr;
 	}
@@ -251,6 +253,7 @@ EXPORT gs_indexbuffer_t *device_indexbuffer_create(gs_device_t *device, enum gs_
 		gs_indexbuffer_destroy(ib); // frees indices, as D3D11 does on failure
 		return nullptr;
 	}
+	device->objects.index_buffers.insert(ib);
 	return ib;
 }
 
@@ -260,6 +263,7 @@ EXPORT void gs_indexbuffer_destroy(gs_indexbuffer_t *indexbuffer)
 		return;
 	}
 	gs_device *d = indexbuffer->device;
+	d->objects.index_buffers.erase(indexbuffer);
 	if (d->cur_ib == indexbuffer) {
 		d->cur_ib = nullptr;
 	}
@@ -308,7 +312,12 @@ EXPORT enum gs_index_type gs_indexbuffer_get_type(const gs_indexbuffer_t *indexb
 EXPORT gs_samplerstate_t *device_samplerstate_create(gs_device_t *device, const struct gs_sampler_info *info)
 {
 	VkSampler s = vk_create_sampler(device, *info);
-	return s ? new gs_sampler_state{device, s, *info} : nullptr;
+	if (!s) {
+		return nullptr;
+	}
+	auto ss = new gs_sampler_state{device, s, *info};
+	device->objects.samplers.insert(ss);
+	return ss;
 }
 
 EXPORT void gs_samplerstate_destroy(gs_samplerstate_t *samplerstate)
@@ -317,6 +326,7 @@ EXPORT void gs_samplerstate_destroy(gs_samplerstate_t *samplerstate)
 		return;
 	}
 	gs_device *d = samplerstate->device;
+	d->objects.samplers.erase(samplerstate);
 	for (gs_sampler_state *&s : d->cur_samplers) {
 		if (s == samplerstate) {
 			s = nullptr;
@@ -354,4 +364,70 @@ EXPORT void device_load_samplerstate(gs_device_t *device, gs_samplerstate_t *sam
 
 // As D3D11: not implemented there either.
 EXPORT void device_load_default_samplerstate(gs_device_t *device, bool b_3d, int unit) {}
+}
+
+/* ---- Device-loss rebuild (vulkan-rebuild.cpp) ------------------------------------------------------------------- */
+
+// The GPU is idle: destroyed at once. Dynamic data lives in the frames' arenas, which went with the frames.
+static void release_now(gs_device *d, vk_buffer &b)
+{
+	if (b.alloc) {
+		vmaDestroyBuffer(d->vma, b.buffer, b.alloc);
+	}
+	const uint32_t stride = b.stride;
+	b = {};
+	b.stride = stride;
+}
+
+void vk_buffers_release(gs_device *d)
+{
+	for (gs_vertex_buffer *vb : d->objects.vertex_buffers) {
+		for (vk_buffer &b : vb->attrs) {
+			release_now(d, b);
+		}
+		vb->dirty = true;
+		vb->upload_value = 0;
+	}
+	for (gs_index_buffer *ib : d->objects.index_buffers) {
+		release_now(d, ib->buf);
+		ib->dirty = true;
+		ib->upload_value = 0;
+	}
+	for (gs_sampler_state *s : d->objects.samplers) {
+		vkDestroySampler(d->dev, s->sampler, nullptr);
+		s->sampler = VK_NULL_HANDLE;
+	}
+}
+
+// Static buffers from the CPU copies they keep (as D3D11's Rebuild); dynamic ones upload on their next draw.
+bool vk_buffers_recreate(gs_device *d)
+{
+	bool ok = true;
+	for (gs_vertex_buffer *vb : d->objects.vertex_buffers) {
+		if (vb->dynamic) {
+			continue;
+		}
+		std::vector<vb_array> a = vb_arrays(vb->data);
+		for (size_t i = 0; i < a.size() && i < vb->attrs.size(); ++i) {
+			if (a[i].data && !create_static(d, a[i].data, (VkDeviceSize)a[i].stride * vb->data->num,
+							VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, a[i].stride, vb->attrs[i])) {
+				ok = false;
+			}
+		}
+	}
+	for (gs_index_buffer *ib : d->objects.index_buffers) {
+		const size_t size = ib->type == GS_UNSIGNED_SHORT ? 2 : 4;
+		if (!ib->dynamic && !create_static(d, ib->indices, ib->num * size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+						   (uint32_t)size, ib->buf)) {
+			ok = false;
+		}
+	}
+	for (gs_sampler_state *s : d->objects.samplers) {
+		s->sampler = vk_create_sampler(d, s->info);
+		ok = ok && s->sampler;
+	}
+	if (!ok) {
+		blog(LOG_ERROR, "[libobs-vulkan] device rebuild: a buffer or sampler could not be created again");
+	}
+	return ok;
 }

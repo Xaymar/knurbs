@@ -22,6 +22,14 @@ target_sources(knurbs-amf PRIVATE amf-encoder-opts.hpp amf-encoder.cpp amf-ids.h
 
 target_link_libraries(knurbs-amf PRIVATE OBS::libobs OBS::opts-parser AMF::AMF)
 
+# The Vulkan renderer's texture path: headers only, vulkan-1.dll is loaded at run time.
+if(ENABLE_VULKAN)
+  find_package(Vulkan REQUIRED)
+  target_sources(knurbs-amf PRIVATE amf-encoder-vulkan.cpp amf-encoder-vulkan.hpp)
+  target_link_libraries(knurbs-amf PRIVATE Vulkan::Headers)
+  target_compile_definitions(knurbs-amf PRIVATE ENABLE_AMF_VULKAN)
+endif()
+
 configure_file(cmake/windows/obs-module.rc.in knurbs-amf.rc)
 target_sources(knurbs-amf PRIVATE knurbs-amf.rc)
 

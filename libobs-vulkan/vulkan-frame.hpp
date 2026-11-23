@@ -3,7 +3,9 @@
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
+#include <array>
 #include <functional>
+#include <string>
 #include <vector>
 
 struct vk_queue {
@@ -18,6 +20,12 @@ struct vk_queue {
 	VkQueueGlobalPriorityKHR global_priority = (VkQueueGlobalPriorityKHR)0;
 	// The globalPriority actually chained to this queue's VkDeviceQueueCreateInfo (0: none was chained).
 	VkQueueGlobalPriorityKHR create_info_priority = (VkQueueGlobalPriorityKHR)0;
+};
+
+// Extra synchronisation for one submission (interop: imported or exported timelines, keyed mutexes).
+struct vk_submit_extra {
+	std::vector<VkSemaphoreSubmitInfo> waits, signals;
+	const void *pnext = nullptr; // chained to VkSubmitInfo2 (VkWin32KeyedMutexAcquireReleaseInfoKHR)
 };
 
 // One host-visible, persistently mapped block of a frame's upload arena.
@@ -57,16 +65,37 @@ struct vk_frame_ring {
 	bool recording = false; // frames[index] is between begin() and submit()
 	// Test hook OBS_VULKAN_TEST_FAIL_SUBMIT=1 (read by vk_device_init): every submit fails. Tests may toggle it.
 	bool test_fail_submit = false;
+	// Test hook OBS_VULKAN_TEST_DEVICE_LOST=N (read by vk_device_init): the N-th submit from now reports
+	// VK_ERROR_DEVICE_LOST without reaching the driver, and every later one does too until the device is rebuilt
+	// (test_lost), as on a lost device. 0: off. Tests may set it.
+	uint32_t test_lose_after = 0;
+	bool test_lost = false;
+	// A VK_ERROR_DEVICE_LOST was seen (vk_check, submit, begin); the next safe point rebuilds (vk_handle_loss).
+	bool lost = false;
+
+	// Open debug labels (device_debug_marker_begin), innermost last. A label region must begin and end in one
+	// command buffer, so submit() ends the open ones before vkEndCommandBuffer and begin() opens them again.
+	struct label {
+		std::string name;
+		std::array<float, 4> color;
+	};
+	std::vector<label> labels;
+	PFN_vkCmdBeginDebugUtilsLabelEXT begin_label = nullptr; // null without VK_EXT_debug_utils
+	PFN_vkCmdEndDebugUtilsLabelEXT end_label = nullptr;
+	void record_label(VkCommandBuffer cmd, const label &l) const;
 
 	bool init(VkDevice dev, uint32_t family);
 	void destroy();
 
 	// Waits only if the slot's previous submission is still in flight; returns it with `cmd` recording.
 	vk_frame &begin();
-	// Ends and submits the current frame on q (same family as init). wait/signal are optional binary semaphores.
-	// On failure the queue is drained, the timeline value is signalled from the host and added to q.failed_values,
-	// then the frame's deferred work runs.
-	bool submit(vk_queue &q, VkSemaphore *wait, VkSemaphore *signal);
+	// Ends and submits the current frame on q (same family as init). wait/signal are optional binary semaphores,
+	// extra adds timeline waits and signals and a pNext chain. On failure the queue is drained, the timeline value
+	// (and extra's timeline signals) are signalled from the host so no waiter hangs, the value is added to
+	// q.failed_values, then the frame's deferred work runs. `result` (optional) receives vkQueueSubmit2's result;
+	// a success code other than VK_SUCCESS (VK_TIMEOUT of a keyed mutex acquire) counts as submitted.
+	bool submit(vk_queue &q, VkSemaphore *wait, VkSemaphore *signal, const vk_submit_extra *extra = nullptr,
+		    VkResult *result = nullptr);
 	// Runs fn once every submission so far, and the frame being recorded, has finished on the GPU.
 	void defer_destroy(std::function<void()> fn);
 };

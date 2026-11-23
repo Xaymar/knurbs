@@ -650,6 +650,198 @@ EXPORT bool device_texture_create_p010(gs_device_t *device, gs_texture_t **tex_y
 }
 
 /* ------------------------------------------------------------------------- */
+/* External memory and synchronisation: unsupported without a GPU            */
+
+EXPORT bool device_get_adapter_identity(gs_device_t *device, struct gs_adapter_identity *identity)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(identity);
+	COUNT(device_get_adapter_identity);
+	return false;
+}
+
+EXPORT bool device_shared_texture_supported(gs_device_t *device, enum gs_handle_type type, enum gs_shared_layout layout,
+					    enum gs_color_format format, bool import)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(type);
+	UNUSED_PARAMETER(layout);
+	UNUSED_PARAMETER(format);
+	UNUSED_PARAMETER(import);
+	COUNT(device_shared_texture_supported);
+	return false;
+}
+
+EXPORT bool device_texture_create_exportable(gs_device_t *device, uint32_t width, uint32_t height,
+					     enum gs_color_format format, enum gs_shared_layout layout, uint32_t flags,
+					     gs_texture_t **tex, gs_texture_t **tex_uv)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(width);
+	UNUSED_PARAMETER(height);
+	UNUSED_PARAMETER(format);
+	UNUSED_PARAMETER(layout);
+	UNUSED_PARAMETER(flags);
+	UNUSED_PARAMETER(tex);
+	UNUSED_PARAMETER(tex_uv);
+	COUNT(device_texture_create_exportable);
+	return false;
+}
+
+EXPORT bool device_texture_export(gs_device_t *device, gs_texture_t *tex, enum gs_handle_type type,
+				  struct gs_shared_texture_desc *desc)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(tex);
+	UNUSED_PARAMETER(type);
+	UNUSED_PARAMETER(desc);
+	COUNT(device_texture_export);
+	return false;
+}
+
+EXPORT bool device_texture_import(gs_device_t *device, const struct gs_shared_texture_desc *desc, gs_texture_t **tex,
+				  gs_texture_t **tex_uv)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(desc);
+	UNUSED_PARAMETER(tex);
+	UNUSED_PARAMETER(tex_uv);
+	COUNT(device_texture_import);
+	return false;
+}
+
+EXPORT gs_sharedbuf_t *device_sharedbuf_create(gs_device_t *device, uint32_t width, uint32_t height,
+					       enum gs_shared_layout layout)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(width);
+	UNUSED_PARAMETER(height);
+	UNUSED_PARAMETER(layout);
+	COUNT(device_sharedbuf_create);
+	return NULL;
+}
+
+EXPORT void gs_sharedbuf_destroy(gs_sharedbuf_t *buf)
+{
+	UNUSED_PARAMETER(buf);
+	COUNT(gs_sharedbuf_destroy);
+}
+
+EXPORT bool device_sharedbuf_copy_texture(gs_device_t *device, gs_sharedbuf_t *buf, gs_texture_t *tex_y)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(buf);
+	UNUSED_PARAMETER(tex_y);
+	COUNT(device_sharedbuf_copy_texture);
+	return false;
+}
+
+EXPORT bool device_sharedbuf_export(gs_device_t *device, gs_sharedbuf_t *buf, enum gs_handle_type type,
+				    struct gs_shared_texture_desc *desc)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(buf);
+	UNUSED_PARAMETER(type);
+	UNUSED_PARAMETER(desc);
+	COUNT(device_sharedbuf_export);
+	return false;
+}
+
+EXPORT gs_timeline_t *device_timeline_create(gs_device_t *device, uint64_t initial_value)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(initial_value);
+	COUNT(device_timeline_create);
+	return NULL;
+}
+
+EXPORT gs_timeline_t *device_timeline_import(gs_device_t *device, const struct gs_shared_handle *handle)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(handle);
+	COUNT(device_timeline_import);
+	return NULL;
+}
+
+EXPORT bool device_timeline_export(gs_device_t *device, gs_timeline_t *timeline, enum gs_handle_type type,
+				   struct gs_shared_handle *handle)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(timeline);
+	UNUSED_PARAMETER(type);
+	UNUSED_PARAMETER(handle);
+	COUNT(device_timeline_export);
+	return false;
+}
+
+EXPORT void gs_timeline_destroy(gs_timeline_t *timeline)
+{
+	UNUSED_PARAMETER(timeline);
+	COUNT(gs_timeline_destroy);
+}
+
+EXPORT bool device_timeline_signal(gs_device_t *device, gs_timeline_t *timeline, uint64_t value)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(timeline);
+	UNUSED_PARAMETER(value);
+	COUNT(device_timeline_signal);
+	return false;
+}
+
+EXPORT bool device_timeline_wait(gs_device_t *device, gs_timeline_t *timeline, uint64_t value)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(timeline);
+	UNUSED_PARAMETER(value);
+	COUNT(device_timeline_wait);
+	return false;
+}
+
+EXPORT uint64_t device_timeline_get_value(gs_device_t *device, gs_timeline_t *timeline)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(timeline);
+	COUNT(device_timeline_get_value);
+	return 0;
+}
+
+EXPORT int device_timeline_wait_cpu(gs_device_t *device, gs_timeline_t *timeline, uint64_t value, uint64_t timeout_ns)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(timeline);
+	UNUSED_PARAMETER(value);
+	UNUSED_PARAMETER(timeout_ns);
+	COUNT(device_timeline_wait_cpu);
+	return -1;
+}
+
+EXPORT bool device_timeline_signal_cpu(gs_device_t *device, gs_timeline_t *timeline, uint64_t value)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(timeline);
+	UNUSED_PARAMETER(value);
+	COUNT(device_timeline_signal_cpu);
+	return false;
+}
+
+EXPORT bool device_sync_file_export(gs_device_t *device, struct gs_shared_handle *handle)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(handle);
+	COUNT(device_sync_file_export);
+	return false;
+}
+
+EXPORT bool device_sync_file_wait(gs_device_t *device, const struct gs_shared_handle *handle)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(handle);
+	COUNT(device_sync_file_wait);
+	return false;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Stage surfaces, z-stencil, samplers                                       */
 
 EXPORT gs_stagesurf_t *device_stagesurface_create(gs_device_t *device, uint32_t width, uint32_t height,
@@ -721,7 +913,6 @@ EXPORT void gs_stagesurface_unmap(gs_stagesurf_t *stagesurf)
 	stagesurf->mapped = false;
 }
 
-#ifdef _WIN32
 EXPORT gs_stagesurf_t *device_stagesurface_create_nv12(gs_device_t *device, uint32_t width, uint32_t height)
 {
 	COUNT(device_stagesurface_create_nv12);
@@ -741,7 +932,6 @@ EXPORT gs_stagesurf_t *device_stagesurface_create_p010(gs_device_t *device, uint
 	/* both planes in one buffer, the UV plane after the Y plane */
 	return device_stagesurface_create(device, width, height + height / 2, GS_R16);
 }
-#endif
 
 EXPORT gs_zstencil_t *device_zstencil_create(gs_device_t *device, uint32_t width, uint32_t height,
 					     enum gs_zstencil_format format)

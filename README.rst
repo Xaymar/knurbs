@@ -107,3 +107,8 @@ contributors (see ``AUTHORS``). Like OBS Studio, it is distributed under the
 GNU General Public License v2 (or any later version); see the accompanying
 ``LICENSE`` file for details. Bundled third-party code under ``deps/`` and
 elsewhere keeps its own licence.
+
+The game capture hook binaries (``graphics-hook``, ``inject-helper``,
+``get-graphics-offsets``) are OBS Studio's own release binaries, redistributed
+unchanged with OBS Project's signature; their source is OBS Studio's, published
+upstream and also in this tree. See ``docs/game-capture-hook.md``.

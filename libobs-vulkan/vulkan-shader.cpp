@@ -86,6 +86,9 @@ static gs_shader_t *shader_create_unguarded(gs_device_t *device, enum gs_shader_
 	s->viewproj = gs_shader_get_param_by_name(s, "ViewProj");
 	s->world = gs_shader_get_param_by_name(s, "World");
 	s->dirty = true;
+	if (device) { // tests compile without a device
+		device->objects.shaders.insert(s);
+	}
 	return s;
 }
 
@@ -122,6 +125,7 @@ EXPORT gs_shader_t *device_pixelshader_create(gs_device_t *device, const char *s
 EXPORT void gs_shader_destroy(gs_shader_t *shader)
 {
 	if (shader && shader->device) {
+		shader->device->objects.shaders.erase(shader);
 		shader->device->pipelines.forget(shader);
 	}
 	delete shader;

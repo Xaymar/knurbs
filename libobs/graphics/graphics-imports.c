@@ -15,14 +15,38 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ******************************************************************************/
 
+#if !defined(_WIN32) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE /* dladdr */
+#endif
+
 #include "../util/base.h"
 #include "../util/dstr.h"
 #include "../util/platform.h"
 #include "graphics-internal.h"
 
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+
+/* dlsym on a module handle also searches the module's dependencies, and libobs itself exports most gs_* names.
+ * A symbol the module does not define would then resolve to libobs's own wrapper, which calls itself through
+ * the export table (gs_texture_is_rect spins forever with libobs-vulkan on Linux). Only accept symbols that are
+ * defined inside the module. */
+static void *graphics_dlsym(void *module, const char *name)
+{
+	void *sym = os_dlsym(module, name);
+#ifndef _WIN32
+	Dl_info in_module, in_libobs;
+	if (sym && dladdr(sym, &in_module) && dladdr((void *)graphics_dlsym, &in_libobs) &&
+	    in_module.dli_fbase == in_libobs.dli_fbase)
+		return NULL;
+#endif
+	return sym;
+}
+
 #define GRAPHICS_IMPORT(func)                                     \
 	do {                                                      \
-		exports->func = os_dlsym(module, #func);          \
+		exports->func = graphics_dlsym(module, #func);    \
 		if (!exports->func) {                             \
 			success = false;                          \
 			blog(LOG_ERROR,                           \
@@ -34,7 +58,7 @@
 
 #define GRAPHICS_IMPORT_OPTIONAL(func)                   \
 	do {                                             \
-		exports->func = os_dlsym(module, #func); \
+		exports->func = graphics_dlsym(module, #func); \
 	} while (false)
 
 bool load_graphics_imports(struct gs_exports *exports, void *module, const char *module_name)
@@ -208,6 +232,30 @@ bool load_graphics_imports(struct gs_exports *exports, void *module, const char 
 
 	GRAPHICS_IMPORT_OPTIONAL(gs_get_adapter_count);
 
+	/* External memory and synchronisation (docs/graphics-interop.md) */
+	GRAPHICS_IMPORT_OPTIONAL(device_get_adapter_identity);
+	GRAPHICS_IMPORT_OPTIONAL(device_shared_texture_supported);
+	GRAPHICS_IMPORT_OPTIONAL(device_texture_create_exportable);
+	GRAPHICS_IMPORT_OPTIONAL(device_texture_export);
+	GRAPHICS_IMPORT_OPTIONAL(device_texture_import);
+	GRAPHICS_IMPORT_OPTIONAL(device_sharedbuf_create);
+	GRAPHICS_IMPORT_OPTIONAL(gs_sharedbuf_destroy);
+	GRAPHICS_IMPORT_OPTIONAL(device_sharedbuf_copy_texture);
+	GRAPHICS_IMPORT_OPTIONAL(device_sharedbuf_export);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_create);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_import);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_export);
+	GRAPHICS_IMPORT_OPTIONAL(gs_timeline_destroy);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_signal);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_wait);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_get_value);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_wait_cpu);
+	GRAPHICS_IMPORT_OPTIONAL(device_timeline_signal_cpu);
+	GRAPHICS_IMPORT_OPTIONAL(device_sync_file_export);
+	GRAPHICS_IMPORT_OPTIONAL(device_sync_file_wait);
+	GRAPHICS_IMPORT_OPTIONAL(device_stagesurface_create_nv12);
+	GRAPHICS_IMPORT_OPTIONAL(device_stagesurface_create_p010);
+
 	/* OSX/Cocoa specific functions */
 #ifdef __APPLE__
 	GRAPHICS_IMPORT(device_shared_texture_available);
@@ -237,8 +285,6 @@ bool load_graphics_imports(struct gs_exports *exports, void *module, const char 
 	GRAPHICS_IMPORT_OPTIONAL(device_texture_wrap_obj);
 	GRAPHICS_IMPORT_OPTIONAL(device_texture_acquire_sync);
 	GRAPHICS_IMPORT_OPTIONAL(device_texture_release_sync);
-	GRAPHICS_IMPORT_OPTIONAL(device_stagesurface_create_nv12);
-	GRAPHICS_IMPORT_OPTIONAL(device_stagesurface_create_p010);
 	GRAPHICS_IMPORT_OPTIONAL(device_register_loss_callbacks);
 	GRAPHICS_IMPORT_OPTIONAL(device_unregister_loss_callbacks);
 #elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)

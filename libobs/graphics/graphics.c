@@ -16,6 +16,12 @@
 ******************************************************************************/
 
 #include <assert.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "../util/base.h"
 #include "../util/bmem.h"
@@ -2999,6 +3005,233 @@ uint32_t gs_get_adapter_count(void)
 	return thread_graphics->exports.gs_get_adapter_count();
 }
 
+/* External memory and synchronisation. Each wrapper fails (false, NULL, 0 or -1) when the backend lacks it. */
+
+void gs_shared_handle_close(struct gs_shared_handle *handle)
+{
+	if (!handle)
+		return;
+	switch (handle->type) {
+	case GS_HANDLE_WIN32:
+	case GS_HANDLE_WIN32_D3D11:
+	case GS_HANDLE_WIN32_D3D12_FENCE:
+#ifdef _WIN32
+		if (handle->win32)
+			CloseHandle(handle->win32);
+#endif
+		break;
+	case GS_HANDLE_FD:
+	case GS_HANDLE_DMABUF:
+	case GS_HANDLE_SYNC_FD:
+#ifndef _WIN32
+		if (handle->fd >= 0)
+			close(handle->fd);
+#endif
+		break;
+	case GS_HANDLE_WIN32_D3D11_KMT: /* a global name, nothing to release */
+	case GS_HANDLE_NONE:
+		break;
+	}
+	handle->type = GS_HANDLE_NONE;
+	handle->win32 = NULL;
+	handle->fd = -1;
+}
+
+#define GS_INTEROP_CALL(name, fail, ...)                         \
+	graphics_t *graphics = thread_graphics;                  \
+	if (!gs_valid("gs_" #name))                              \
+		return fail;                                     \
+	if (!graphics->exports.device_##name)                    \
+		return fail;                                     \
+	return graphics->exports.device_##name(graphics->device, __VA_ARGS__)
+
+bool gs_get_adapter_identity(struct gs_adapter_identity *identity)
+{
+	if (!identity)
+		return false;
+	GS_INTEROP_CALL(get_adapter_identity, false, identity);
+}
+
+bool gs_shared_texture_supported(enum gs_handle_type type, enum gs_shared_layout layout, enum gs_color_format format,
+				 bool import)
+{
+	GS_INTEROP_CALL(shared_texture_supported, false, type, layout, format, import);
+}
+
+bool gs_texture_create_exportable(uint32_t width, uint32_t height, enum gs_color_format format,
+				  enum gs_shared_layout layout, uint32_t flags, gs_texture_t **tex,
+				  gs_texture_t **tex_uv)
+{
+	if (!tex || (layout != GS_SHARED_SINGLE && !tex_uv))
+		return false;
+	*tex = NULL;
+	if (tex_uv)
+		*tex_uv = NULL;
+	GS_INTEROP_CALL(texture_create_exportable, false, width, height, format, layout, flags, tex, tex_uv);
+}
+
+bool gs_texture_export(gs_texture_t *tex, enum gs_handle_type type, struct gs_shared_texture_desc *desc)
+{
+	if (!tex || !desc)
+		return false;
+	GS_INTEROP_CALL(texture_export, false, tex, type, desc);
+}
+
+bool gs_texture_import(const struct gs_shared_texture_desc *desc, gs_texture_t **tex, gs_texture_t **tex_uv)
+{
+	if (!desc || !tex || (desc->layout != GS_SHARED_SINGLE && !tex_uv))
+		return false;
+	*tex = NULL;
+	if (tex_uv)
+		*tex_uv = NULL;
+	GS_INTEROP_CALL(texture_import, false, desc, tex, tex_uv);
+}
+
+gs_sharedbuf_t *gs_sharedbuf_create(uint32_t width, uint32_t height, enum gs_shared_layout layout)
+{
+	GS_INTEROP_CALL(sharedbuf_create, NULL, width, height, layout);
+}
+
+void gs_sharedbuf_destroy(gs_sharedbuf_t *buf)
+{
+	graphics_t *graphics = thread_graphics;
+	if (!gs_valid("gs_sharedbuf_destroy") || !buf)
+		return;
+	if (graphics->exports.gs_sharedbuf_destroy)
+		graphics->exports.gs_sharedbuf_destroy(buf);
+}
+
+bool gs_sharedbuf_copy_texture(gs_sharedbuf_t *buf, gs_texture_t *tex_y)
+{
+	if (!buf || !tex_y)
+		return false;
+	GS_INTEROP_CALL(sharedbuf_copy_texture, false, buf, tex_y);
+}
+
+bool gs_sharedbuf_export(gs_sharedbuf_t *buf, enum gs_handle_type type, struct gs_shared_texture_desc *desc)
+{
+	if (!buf || !desc)
+		return false;
+	GS_INTEROP_CALL(sharedbuf_export, false, buf, type, desc);
+}
+
+gs_timeline_t *gs_timeline_create(uint64_t initial_value)
+{
+	GS_INTEROP_CALL(timeline_create, NULL, initial_value);
+}
+
+gs_timeline_t *gs_timeline_import(const struct gs_shared_handle *handle)
+{
+	if (!handle)
+		return NULL;
+	GS_INTEROP_CALL(timeline_import, NULL, handle);
+}
+
+bool gs_timeline_export(gs_timeline_t *timeline, enum gs_handle_type type, struct gs_shared_handle *handle)
+{
+	if (!timeline || !handle)
+		return false;
+	GS_INTEROP_CALL(timeline_export, false, timeline, type, handle);
+}
+
+void gs_timeline_destroy(gs_timeline_t *timeline)
+{
+	graphics_t *graphics = thread_graphics;
+	if (!gs_valid("gs_timeline_destroy") || !timeline)
+		return;
+	if (graphics->exports.gs_timeline_destroy)
+		graphics->exports.gs_timeline_destroy(timeline);
+}
+
+bool gs_timeline_signal(gs_timeline_t *timeline, uint64_t value)
+{
+	if (!timeline)
+		return false;
+	GS_INTEROP_CALL(timeline_signal, false, timeline, value);
+}
+
+bool gs_timeline_wait(gs_timeline_t *timeline, uint64_t value)
+{
+	if (!timeline)
+		return false;
+	GS_INTEROP_CALL(timeline_wait, false, timeline, value);
+}
+
+uint64_t gs_timeline_get_value(gs_timeline_t *timeline)
+{
+	if (!timeline)
+		return 0;
+	GS_INTEROP_CALL(timeline_get_value, 0, timeline);
+}
+
+int gs_timeline_wait_cpu(gs_timeline_t *timeline, uint64_t value, uint64_t timeout_ns)
+{
+	if (!timeline)
+		return -1;
+	GS_INTEROP_CALL(timeline_wait_cpu, -1, timeline, value, timeout_ns);
+}
+
+bool gs_timeline_signal_cpu(gs_timeline_t *timeline, uint64_t value)
+{
+	if (!timeline)
+		return false;
+	GS_INTEROP_CALL(timeline_signal_cpu, false, timeline, value);
+}
+
+bool gs_sync_file_export(struct gs_shared_handle *handle)
+{
+	if (!handle)
+		return false;
+	GS_INTEROP_CALL(sync_file_export, false, handle);
+}
+
+bool gs_sync_file_wait(const struct gs_shared_handle *handle)
+{
+	if (!handle)
+		return false;
+	GS_INTEROP_CALL(sync_file_wait, false, handle);
+}
+
+#undef GS_INTEROP_CALL
+
+gs_stagesurf_t *gs_stagesurface_create_nv12(uint32_t width, uint32_t height)
+{
+	graphics_t *graphics = thread_graphics;
+
+	if (!gs_valid("gs_stagesurface_create_nv12"))
+		return NULL;
+
+	if ((width & 1) == 1 || (height & 1) == 1) {
+		blog(LOG_ERROR, "NV12 textures must have dimensions "
+				"divisible by 2.");
+		return NULL;
+	}
+
+	if (graphics->exports.device_stagesurface_create_nv12)
+		return graphics->exports.device_stagesurface_create_nv12(graphics->device, width, height);
+
+	return NULL;
+}
+
+gs_stagesurf_t *gs_stagesurface_create_p010(uint32_t width, uint32_t height)
+{
+	graphics_t *graphics = thread_graphics;
+
+	if (!gs_valid("gs_stagesurface_create_p010"))
+		return NULL;
+
+	if ((width & 1) == 1 || (height & 1) == 1) {
+		blog(LOG_ERROR, "P010 textures must have dimensions "
+				"divisible by 2.");
+		return NULL;
+	}
+
+	if (graphics->exports.device_stagesurface_create_p010)
+		return graphics->exports.device_stagesurface_create_p010(graphics->device, width, height);
+
+	return NULL;
+}
+
 #ifdef __APPLE__
 
 /** Platform specific functions */
@@ -3252,44 +3485,6 @@ int gs_texture_release_sync(gs_texture_t *tex, uint64_t key)
 	if (graphics->exports.device_texture_release_sync)
 		return graphics->exports.device_texture_release_sync(tex, key);
 	return -1;
-}
-
-gs_stagesurf_t *gs_stagesurface_create_nv12(uint32_t width, uint32_t height)
-{
-	graphics_t *graphics = thread_graphics;
-
-	if (!gs_valid("gs_stagesurface_create_nv12"))
-		return NULL;
-
-	if ((width & 1) == 1 || (height & 1) == 1) {
-		blog(LOG_ERROR, "NV12 textures must have dimensions "
-				"divisible by 2.");
-		return NULL;
-	}
-
-	if (graphics->exports.device_stagesurface_create_nv12)
-		return graphics->exports.device_stagesurface_create_nv12(graphics->device, width, height);
-
-	return NULL;
-}
-
-gs_stagesurf_t *gs_stagesurface_create_p010(uint32_t width, uint32_t height)
-{
-	graphics_t *graphics = thread_graphics;
-
-	if (!gs_valid("gs_stagesurface_create_p010"))
-		return NULL;
-
-	if ((width & 1) == 1 || (height & 1) == 1) {
-		blog(LOG_ERROR, "P010 textures must have dimensions "
-				"divisible by 2.");
-		return NULL;
-	}
-
-	if (graphics->exports.device_stagesurface_create_p010)
-		return graphics->exports.device_stagesurface_create_p010(graphics->device, width, height);
-
-	return NULL;
 }
 
 void gs_register_loss_callbacks(const struct gs_device_loss *callbacks)

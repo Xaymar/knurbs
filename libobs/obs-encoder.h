@@ -39,6 +39,12 @@ typedef struct obs_encoder obs_encoder_t;
 #define OBS_ENCODER_CAP_ROI (1 << 4)
 #define OBS_ENCODER_CAP_SCALING (1 << 5)
 #define OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE (1 << 6)
+/** Texture encoder that reads encoder_texture::shared (OS handles and timelines, docs/graphics-interop.md) and
+ * signals the release timeline once it is done with a frame. Without it libobs takes a frame back as soon as
+ * encode_texture2 returns. Only meaningful with OBS_ENCODER_CAP_PASS_TEXTURE. */
+#define OBS_ENCODER_CAP_SHARED_HANDLES (1 << 7)
+/** Also wants encoder_texture_shared::buf, the pitch-linear copy of the frame (NVENC on Vulkan). */
+#define OBS_ENCODER_CAP_SHARED_BUFFER (1 << 8)
 
 /* Every encoder's properties start with this notice, added by
  * obs_encoder_properties and obs_get_encoder_properties. It is an
@@ -186,12 +192,39 @@ struct obs_encoder_roi {
 
 struct gs_texture;
 
+/**
+ * A texture encoder frame as OS handles (Vulkan renderer; docs/graphics-interop.md, "Texture encoders").
+ *
+ * libobs owns every handle here and keeps it open while the frame pool exists; an encoder imports them (imports
+ * borrow the handle) and caches the imports by `tex_id` / `buf_id`. Read `tex` or `buf` only after `ready` has reached
+ * `ready_value`. Signal `release` to at least `release_value` once nothing reads the frame any more (values only
+ * increase, so signal in order); until then libobs does not write the frame again.
+ */
+struct encoder_texture_shared {
+	/** Identify the memory of tex and buf for the life of the pool; an id is never reused for other memory.
+	 * Images move between frames, so the two are independent. 0: not exported. */
+	uint64_t tex_id;
+	uint64_t buf_id;
+	/** The NV12/P010 image (both planes; flags GS_RENDER_TARGET) */
+	struct gs_shared_texture_desc tex;
+	/** Pitch-linear copy (Y rows, then UV rows), only with OBS_ENCODER_CAP_SHARED_BUFFER; type NONE otherwise */
+	struct gs_shared_texture_desc buf;
+	/** Timeline libobs signals once the frame is written; the same timeline for every frame of the pool */
+	struct gs_shared_handle ready;
+	uint64_t ready_value;
+	/** This encoder's timeline, which it signals; the same for every frame it receives */
+	struct gs_shared_handle release;
+	uint64_t release_value;
+};
+
 /** Encoder input texture */
 struct encoder_texture {
 	/** Shared texture handle, only set on Windows */
 	uint32_t handle;
 	/** Textures, length determined by format */
 	struct gs_texture *tex[4];
+	/** Vulkan renderer with OBS_ENCODER_CAP_SHARED_HANDLES: the frame as OS handles; NULL otherwise */
+	const struct encoder_texture_shared *shared;
 };
 
 /**

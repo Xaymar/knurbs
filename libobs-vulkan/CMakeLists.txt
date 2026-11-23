@@ -15,13 +15,16 @@ target_sources(
     vulkan-frame.cpp
     vulkan-frame.hpp
     vulkan-instance.cpp
+    vulkan-interop.cpp
     vulkan-pipeline.cpp
+    vulkan-rebuild.cpp
     vulkan-shader.cpp
     vulkan-shaderprocessor.cpp
     vulkan-subsystem.cpp
     vulkan-subsystem.hpp
     vulkan-swapchain.cpp
     vulkan-texture.cpp
+    vulkan-timer.cpp
     vulkan-tracker.cpp
     vulkan-tracker.hpp
 )
@@ -49,13 +52,23 @@ if(OS_WINDOWS)
   # The SDK ships the static libs without their PDBs.
   target_link_options(libobs-vulkan PRIVATE /IGNORE:4099)
 else()
-  target_link_libraries(libobs-vulkan PRIVATE glslang-default-resource-limits SPIRV-Tools-opt)
+  # Static archives resolve left to right: SPIRV-Tools-opt needs SPIRV-Tools after it, and the module must not
+  # load with unresolved spvtools symbols.
+  target_link_libraries(libobs-vulkan PRIVATE glslang-default-resource-limits SPIRV-Tools-opt Vulkan::SPIRV-Tools)
+  # The module exports gs_* under the same names as libobs. Without -Bsymbolic its internal calls (e.g.
+  # gs_shader_set_val from device_draw) bind to libobs's wrappers, which drop them outside a graphics context.
+  target_link_options(libobs-vulkan PRIVATE LINKER:--no-undefined LINKER:-Bsymbolic)
+  # Linux interop (vulkan-interop.cpp): DRM fourccs and syncobjs from libdrm; GBM is loaded at run time (gbm.h only).
+  find_package(Libdrm REQUIRED)
+  target_link_libraries(libobs-vulkan PRIVATE Libdrm::Libdrm ${CMAKE_DL_LIBS})
 endif()
 
 # Windows delay-loads the loader so a machine without vulkan-1.dll still loads the module and device_create
 # returns GS_ERROR_NOT_SUPPORTED. Linux still hard-links libvulkan (untested in this branch).
 if(OS_WINDOWS)
   target_link_libraries(libobs-vulkan PRIVATE delayimp)
+  # vulkan-interop.cpp reads the description of D3D11 share handles given to the legacy open_shared exports.
+  target_link_libraries(libobs-vulkan PRIVATE d3d11 dxgi)
   target_link_options(libobs-vulkan PRIVATE /DELAYLOAD:vulkan-1.dll)
 endif()
 
@@ -65,6 +78,7 @@ set_target_properties_obs(
   libobs-vulkan
   PROPERTIES FOLDER core
              VERSION 0
+             PREFIX ""
              SOVERSION ${OBS_VERSION_MAJOR}
              COMPILE_WARNING_AS_ERROR FALSE
 )

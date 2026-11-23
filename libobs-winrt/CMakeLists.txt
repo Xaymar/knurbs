@@ -6,6 +6,10 @@ add_library(OBS::winrt-headers ALIAS libobs-winrt-headers)
 target_sources(libobs-winrt-headers INTERFACE winrt-capture.h)
 target_include_directories(libobs-winrt-headers INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
 
+if(NOT TARGET OBS::d3d11-vulkan-bridge)
+  add_subdirectory("${CMAKE_SOURCE_DIR}/shared/d3d11-vulkan-bridge" "${CMAKE_BINARY_DIR}/shared/d3d11-vulkan-bridge")
+endif()
+
 add_library(libobs-winrt MODULE)
 add_library(OBS::libobs-winrt ALIAS libobs-winrt)
 
@@ -26,7 +30,7 @@ target_precompile_headers(
     <winrt/Windows.System.h>
 )
 
-target_link_libraries(libobs-winrt PRIVATE OBS::libobs OBS::COMutils Dwmapi windowsapp)
+target_link_libraries(libobs-winrt PRIVATE OBS::libobs OBS::COMutils OBS::d3d11-vulkan-bridge Dwmapi windowsapp d3d11 dxgi)
 
 # FIXME: WinRT library headers trigger deprecation warning until OBS Studio uses C++20 or newer
 target_compile_definitions(libobs-winrt PRIVATE _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)

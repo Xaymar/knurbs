@@ -158,6 +158,10 @@ if(ENABLE_VULKAN)
     PRIVATE OBS_SOURCE_DIR="${CMAKE_SOURCE_DIR}" OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan"
   )
   add_dependencies(test_vulkan_exports libobs-vulkan)
+  if(TARGET libobs-null)
+    target_compile_definitions(test_vulkan_exports PRIVATE NULL_GRAPHICS_MODULE="$<TARGET_FILE:libobs-null>")
+    add_dependencies(test_vulkan_exports libobs-null)
+  endif()
   target_link_libraries(test_vulkan_exports PRIVATE OBS::libobs cmocka::cmocka)
   add_test(test_vulkan_exports test_vulkan_exports)
 
@@ -205,7 +209,8 @@ if(ENABLE_VULKAN)
   target_link_libraries(test_vulkan_upload PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
   add_test(test_vulkan_upload test_vulkan_upload)
 
-  # Swapchain and present on hidden Win32 windows; skips without a device or windowing.
+  # Swapchain and present on hidden Win32 windows, or Wayland toplevels on a headless weston the test starts; skips
+  # without a device or windowing.
   add_executable(test_vulkan_swapchain test_vulkan_swapchain.cpp)
   target_include_directories(test_vulkan_swapchain PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan)
   target_compile_definitions(
@@ -214,6 +219,27 @@ if(ENABLE_VULKAN)
   )
   add_dependencies(test_vulkan_swapchain libobs-vulkan)
   target_link_libraries(test_vulkan_swapchain PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
+  if(OS_LINUX)
+    # Wayland: xdg toplevels on a headless weston the test starts, read back through weston-screenshooter (PNG).
+    find_package(PkgConfig REQUIRED)
+    find_package(PNG REQUIRED)
+    pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+    pkg_get_variable(_wayland_protocols wayland-protocols pkgdatadir)
+    find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
+    set(_xdg_shell "${_wayland_protocols}/stable/xdg-shell/xdg-shell.xml")
+    set(_gen "${CMAKE_CURRENT_BINARY_DIR}/wayland")
+    add_custom_command(
+      OUTPUT "${_gen}/xdg-shell-client-protocol.h" "${_gen}/xdg-shell-protocol.c"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${_gen}"
+      COMMAND "${WAYLAND_SCANNER}" client-header "${_xdg_shell}" "${_gen}/xdg-shell-client-protocol.h"
+      COMMAND "${WAYLAND_SCANNER}" private-code "${_xdg_shell}" "${_gen}/xdg-shell-protocol.c"
+      DEPENDS "${_xdg_shell}"
+      VERBATIM
+    )
+    target_sources(test_vulkan_swapchain PRIVATE "${_gen}/xdg-shell-protocol.c" "${_gen}/xdg-shell-client-protocol.h")
+    target_include_directories(test_vulkan_swapchain PRIVATE "${_gen}")
+    target_link_libraries(test_vulkan_swapchain PRIVATE PkgConfig::WAYLAND_CLIENT PNG::PNG)
+  endif()
   add_test(test_vulkan_swapchain test_vulkan_swapchain)
 
   # Shader translation and params; the effect parser is compiled in (ep_parse is not exported). No device needed
@@ -253,6 +279,54 @@ if(ENABLE_VULKAN)
   target_link_libraries(test_vulkan_draw PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
   add_test(test_vulkan_draw test_vulkan_draw)
 
+  # NV12/P010 two-plane textures: plane-view rendering, sampling, copy and staging; skips without a device.
+  add_executable(test_vulkan_nv12 test_vulkan_nv12.cpp)
+  target_include_directories(test_vulkan_nv12 PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan)
+  target_compile_definitions(test_vulkan_nv12 PRIVATE OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan")
+  target_compile_features(test_vulkan_nv12 PRIVATE cxx_std_17)
+  add_dependencies(test_vulkan_nv12 libobs-vulkan)
+  target_link_libraries(test_vulkan_nv12 PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
+  add_test(test_vulkan_nv12 test_vulkan_nv12)
+
+  if(OS_WINDOWS)
+    # External memory and sync (D3D11 import, keyed mutex, export/import across devices and processes); needs a
+    # device (skips without one).
+    add_executable(test_vulkan_interop test_vulkan_interop.cpp)
+    target_include_directories(test_vulkan_interop PRIVATE ${CMOCKA_INCLUDE_DIR})
+    target_compile_definitions(
+      test_vulkan_interop
+      PRIVATE OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan"
+    )
+    target_compile_features(test_vulkan_interop PRIVATE cxx_std_17)
+    add_dependencies(test_vulkan_interop libobs-vulkan)
+    target_link_libraries(test_vulkan_interop PRIVATE OBS::libobs cmocka::cmocka d3d11 dxgi)
+    add_test(test_vulkan_interop test_vulkan_interop)
+  endif()
+
+  if(OS_LINUX)
+    # Linux external memory and sync (dmabufs, GBM, opaque fds, sync_files, DRM syncobjs, SCM_RIGHTS to a child);
+    # needs a device (skips without one).
+    find_package(Libdrm REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GBM REQUIRED IMPORTED_TARGET gbm)
+    add_executable(test_vulkan_interop_linux test_vulkan_interop_linux.cpp)
+    target_include_directories(test_vulkan_interop_linux PRIVATE ${CMOCKA_INCLUDE_DIR})
+    target_compile_definitions(
+      test_vulkan_interop_linux
+      PRIVATE OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan"
+    )
+    target_compile_features(test_vulkan_interop_linux PRIVATE cxx_std_17)
+    add_dependencies(test_vulkan_interop_linux libobs-vulkan)
+    target_link_libraries(test_vulkan_interop_linux PRIVATE OBS::libobs cmocka::cmocka Libdrm::Libdrm PkgConfig::GBM)
+    add_test(test_vulkan_interop_linux test_vulkan_interop_linux)
+    set_tests_properties(
+      test_vulkan_interop_linux
+      PROPERTIES
+        ENVIRONMENT "OBS_VULKAN_VALIDATION=1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
+        SKIP_REGULAR_EXPRESSION "SKIPPED"
+    )
+  endif()
+
   # Depth/stencil buffers and depth-tested drawing; needs a device (skips without one).
   add_executable(test_vulkan_depth test_vulkan_depth.cpp)
   target_include_directories(test_vulkan_depth PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan)
@@ -264,6 +338,18 @@ if(ENABLE_VULKAN)
   add_dependencies(test_vulkan_depth libobs-vulkan)
   target_link_libraries(test_vulkan_depth PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
   add_test(test_vulkan_depth test_vulkan_depth)
+
+  # Native objects, timers, debug markers, cube textures, HDR format choice and fast clear (test_vulkan_features), and
+  # the device-loss rebuild (test_vulkan_loss); need a device (skip without one).
+  foreach(_test IN ITEMS test_vulkan_features test_vulkan_loss)
+    add_executable(${_test} ${_test}.cpp)
+    target_include_directories(${_test} PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan)
+    target_compile_definitions(${_test} PRIVATE OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan")
+    target_compile_features(${_test} PRIVATE cxx_std_17)
+    add_dependencies(${_test} libobs-vulkan)
+    target_link_libraries(${_test} PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
+    add_test(${_test} ${_test})
+  endforeach()
 
   # Every .effect in the tree and texrender through the generic gs_* API (gs_create); skips without a device.
   # The test walks the same directories at run time and must find exactly this many.
@@ -329,6 +415,14 @@ if(ENABLE_VULKAN)
       test_vulkan_video_compare
       PROPERTIES FIXTURES_REQUIRED "video_vulkan;video_d3d11" SKIP_REGULAR_EXPRESSION "SKIPPED"
     )
+  else()
+    # No D3D11 reference outside Windows and no golden file committed: only the render's analytic checks run. Say
+    # so in every ctest run instead of leaving the comparison out silently.
+    add_test(
+      NAME test_vulkan_video_compare
+      COMMAND "${CMAKE_COMMAND}" -E echo "SKIPPED: no D3D11 reference render on this platform"
+    )
+    set_tests_properties(test_vulkan_video_compare PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")
   endif()
 
   # Queue priority measurement only (not a test, not installed): the synthetic D3D11 foreground load. The OBS side
@@ -356,13 +450,186 @@ if(ENABLE_VULKAN)
     test_vulkan_swapchain
     test_vulkan_shader
     test_vulkan_draw
+    test_vulkan_nv12
     test_vulkan_depth
+    test_vulkan_features
+    test_vulkan_loss
     test_vulkan_effects
     test_vulkan_video_vulkan
     PROPERTIES
       ENVIRONMENT "OBS_VULKAN_VALIDATION=1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
       SKIP_REGULAR_EXPRESSION "SKIPPED"
   )
+  if(OS_WINDOWS)
+    set_tests_properties(
+      test_vulkan_interop
+      PROPERTIES
+        ENVIRONMENT "OBS_VULKAN_VALIDATION=1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
+        SKIP_REGULAR_EXPRESSION "SKIPPED"
+    )
+  endif()
+
+  # GPU (texture) encoding through the shared frames: a real encoder module encodes a moving, numbered pattern and
+  # libavcodec decodes it back. Each test picks its GPU with VK_LOADER_DRIVERS_SELECT and skips without it.
+  if(OS_WINDOWS AND (TARGET knurbs-nvenc OR TARGET knurbs-amf))
+    find_package(FFmpeg 8.0 REQUIRED COMPONENTS avcodec avutil)
+    add_executable(test_vulkan_gpu_encode test_vulkan_gpu_encode.cpp)
+    target_include_directories(test_vulkan_gpu_encode PRIVATE ${CMOCKA_INCLUDE_DIR})
+    target_compile_definitions(test_vulkan_gpu_encode PRIVATE OBS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_compile_features(test_vulkan_gpu_encode PRIVATE cxx_std_17)
+    target_link_libraries(test_vulkan_gpu_encode PRIVATE OBS::libobs FFmpeg::avcodec FFmpeg::avutil cmocka::cmocka)
+    add_dependencies(test_vulkan_gpu_encode libobs-vulkan)
+    set(_gpu_encode_tests)
+    # The encoders look for their capability probes (knurbs-nvenc-test, knurbs-amf-test) next to the executable.
+    macro(_gpu_encode_probe probe)
+      if(TARGET ${probe})
+        add_dependencies(test_vulkan_gpu_encode ${probe})
+        add_custom_command(
+          TARGET test_vulkan_gpu_encode
+          POST_BUILD
+          COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:${probe}>"
+                  "$<TARGET_FILE_DIR:test_vulkan_gpu_encode>"
+        )
+      endif()
+    endmacro()
+    macro(_gpu_encode_test name driver module id format)
+      add_test(
+        NAME test_vulkan_gpu_encode_${name}
+        COMMAND
+          test_vulkan_gpu_encode "$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan" "$<TARGET_FILE:${module}>" ${id}
+          ${format} ${ARGN}
+      )
+      set_tests_properties(test_vulkan_gpu_encode_${name} PROPERTIES ENVIRONMENT "VK_LOADER_DRIVERS_SELECT=${driver}")
+      list(APPEND _gpu_encode_tests test_vulkan_gpu_encode_${name})
+    endmacro()
+    if(TARGET knurbs-nvenc)
+      add_dependencies(test_vulkan_gpu_encode knurbs-nvenc)
+      _gpu_encode_probe(knurbs-nvenc-test)
+      set(_nv com.xaymar.knurbs.nvenc)
+      _gpu_encode_test(nvenc_h264 *nv-vk64* knurbs-nvenc ${_nv}.h264 nv12 rate_control=CQP cqp=20 bf=2)
+      _gpu_encode_test(nvenc_hevc_p010 *nv-vk64* knurbs-nvenc ${_nv}.hevc p010 rate_control=CQP cqp=20 bf=2)
+      # Lookahead holds many frames: the shared frame pool grows past its initial size.
+      _gpu_encode_test(nvenc_h264_lookahead *nv-vk64* knurbs-nvenc ${_nv}.h264 nv12 rate_control=CQP cqp=20 bf=3 lookahead=true)
+      # A stalled render: libobs repeats frames, so one shared frame sits in several NVENC slots at once.
+      _gpu_encode_test(nvenc_h264_repeat *nv-vk64* knurbs-nvenc ${_nv}.h264 nv12 rate_control=CQP cqp=20 bf=2 stall=10)
+    endif()
+    if(TARGET knurbs-amf)
+      add_dependencies(test_vulkan_gpu_encode knurbs-amf)
+      _gpu_encode_probe(knurbs-amf-test)
+      set(_amf com.xaymar.knurbs.amf)
+      _gpu_encode_test(amf_h264 *amd-vulkan64* knurbs-amf ${_amf}.h264 nv12 rate_control=CQP cqp=20)
+      _gpu_encode_test(amf_hevc_p010 *amd-vulkan64* knurbs-amf ${_amf}.hevc p010 rate_control=CQP cqp=20)
+      _gpu_encode_test(amf_h264_repeat *amd-vulkan64* knurbs-amf ${_amf}.h264 nv12 rate_control=CQP cqp=20 stall=10)
+      # AMF's stale frames (docs/graphics-interop.md, Driver issues): given a new AMFSurface for an image, AMF now and
+      # then encodes the picture of an earlier one, so the encoder wraps each image once. With the code from before
+      # that (OBS_AMF_VULKAN_TEST_WRAP_EACH_FRAME=1) the three tests above fail every run. This one covers many
+      # images: the encoder keeps 76 frames held longer (OBS_AMF_VULKAN_TEST_HOLD), so libobs's frame pool grows to
+      # its limit of 80 and two thirds of the frames come in images AMF has not seen yet (4 of 5 runs fail without
+      # the fix).
+      _gpu_encode_test(amf_h264_fresh_images *amd-vulkan64* knurbs-amf ${_amf}.h264 nv12 rate_control=CQP cqp=20)
+      set_property(TEST test_vulkan_gpu_encode_amf_h264_fresh_images APPEND PROPERTY ENVIRONMENT "OBS_AMF_VULKAN_TEST_HOLD=76")
+    endif()
+    set_tests_properties(
+      ${_gpu_encode_tests}
+      PROPERTIES
+        ENVIRONMENT_MODIFICATION
+          "OBS_VULKAN_VALIDATION=set:1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=set:true"
+        SKIP_REGULAR_EXPRESSION "SKIPPED"
+    )
+  endif()
+
+  # Game capture and window capture on the Vulkan renderer: a producer window (the test itself) with a known
+  # pattern, captured through the real pipeline (hook injection, WGC, BitBlt) and read back. Game capture runs against the
+  # hook Knurbs ships: OBS Studio's signed release binaries (plugins/win-capture/cmake/obs-hook.cmake).
+  if(OS_WINDOWS AND TARGET win-capture)
+    # Installing the hook into C:\ProgramData\obs-studio-hook: signed hooks only, never a downgrade.
+    obs_add_unit_test(test_win_capture_hook_install)
+    target_sources(
+      test_win_capture_hook_install
+      PRIVATE "${CMAKE_SOURCE_DIR}/plugins/win-capture/game-capture-hook-install.c"
+    )
+    target_include_directories(test_win_capture_hook_install PRIVATE "${CMAKE_SOURCE_DIR}/plugins/win-capture")
+    target_link_libraries(test_win_capture_hook_install PRIVATE crypt32 wintrust)
+    target_compile_definitions(test_win_capture_hook_install PRIVATE OBS_SIGNED_HOOK_DIR="${KNURBS_OBS_HOOK_DIR}")
+    set_tests_properties(test_win_capture_hook_install PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")
+
+    add_executable(
+      test_vulkan_win_capture
+      test_vulkan_win_capture.cpp
+      "${CMAKE_SOURCE_DIR}/plugins/win-capture/game-capture-hook-install.c"
+    )
+    target_include_directories(test_vulkan_win_capture PRIVATE "${CMAKE_SOURCE_DIR}/plugins/win-capture")
+    target_include_directories(test_vulkan_win_capture PRIVATE ${CMOCKA_INCLUDE_DIR})
+    target_compile_definitions(test_vulkan_win_capture PRIVATE OBS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_compile_features(test_vulkan_win_capture PRIVATE cxx_std_17)
+    target_link_libraries(test_vulkan_win_capture PRIVATE OBS::libobs d3d11 dxgi cmocka::cmocka crypt32 wintrust)
+    add_dependencies(test_vulkan_win_capture libobs-vulkan win-capture libobs-winrt)
+    set(_win_capture_dir "${OBS_OUTPUT_DIR}/$<CONFIG>/${OBS_PLUGIN_DESTINATION}/win-capture")
+    set(_win_capture_data "${_win_capture_dir}/data")
+    set(_win_capture_tests)
+    macro(_win_capture_test name driver data case)
+      set(_module "$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan")
+      if("${driver}" STREQUAL "d3d11")
+        set(_module "$<TARGET_FILE_DIR:libobs-d3d11>/libobs-d3d11")
+      endif()
+      add_test(
+        NAME test_vulkan_win_capture_${name}
+        COMMAND test_vulkan_win_capture "${_module}" "${_win_capture_dir}/win-capture.dll" "${data}" ${case}
+      )
+      set_tests_properties(test_vulkan_win_capture_${name} PROPERTIES ENVIRONMENT "VK_LOADER_DRIVERS_SELECT=${driver}")
+      list(APPEND _win_capture_tests test_vulkan_win_capture_${name})
+    endmacro()
+    # d3d11: the same cases on the D3D11 renderer, a reference for the paths Vulkan must match.
+    set(_gpus nv amd)
+    if(TARGET libobs-d3d11)
+      add_dependencies(test_vulkan_win_capture libobs-d3d11)
+      list(APPEND _gpus d3d11)
+    endif()
+    foreach(_gpu IN LISTS _gpus)
+      set(_driver "*${_gpu}-vk64*")
+      if(_gpu STREQUAL "amd")
+        set(_driver "*amd-vulkan64*")
+      elseif(_gpu STREQUAL "d3d11")
+        set(_driver "d3d11")
+      endif()
+      foreach(
+        _case
+        IN ITEMS
+          game_bgra
+          game_rgba
+          game_rgb10a2
+          game_rgba16f
+          game_shmem_bgra
+          game_bgra_loss
+          wgc_d3d11
+          wgc_d3d11_hdr
+          wgc_d3d11_loss
+          wgc_gdi
+          wgc_gdi_resize
+          bitblt_gdi
+          display_dxgi
+          display_dxgi_hdr
+          display_dxgi_loss
+          display_dxgi_mode
+          display_wgc
+          display_wgc_hdr
+          display_wgc_loss
+          display_wgc_mode
+      )
+        if(NOT (_gpu STREQUAL "d3d11" AND _case MATCHES "_loss$|^display_dxgi_hdr$")) # simulated by libobs-vulkan / the duplicator
+          _win_capture_test(${_gpu}_${_case} ${_driver} "${_win_capture_data}" ${_case})
+        endif()
+      endforeach()
+    endforeach()
+    set_tests_properties(
+      ${_win_capture_tests}
+      PROPERTIES
+        ENVIRONMENT_MODIFICATION
+          "OBS_VULKAN_VALIDATION=set:1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=set:true;${_obs_runtime_env}"
+        SKIP_REGULAR_EXPRESSION "SKIPPED"
+        RUN_SERIAL TRUE
+    )
+  endif()
 endif()
 
 # OS path test

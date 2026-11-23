@@ -116,6 +116,21 @@ struct nvenc_data {
 	struct nvenc_properties props;
 
 	CUcontext cu_ctx;
+
+	/* Vulkan renderer: frames arrive as handles (nvenc-vulkan.c) */
+	bool vulkan;
+	uint32_t input_pitch; /* of the next picture; 0: cx */
+	struct {
+		CUstream stream;
+		struct nv_vk_semaphore {
+			CUexternalSemaphore sem;
+			void *handle; /* the libobs handle it was imported from */
+		} ready, release;
+		DARRAY(struct nv_vk_buffer) buffers;
+		DARRAY(struct nv_vk_input) inputs; /* per bitstream slot */
+		uint64_t queued;                   /* highest release value handed to NVENC */
+		uint64_t signalled;                /* highest release value signalled */
+	} vk;
 };
 
 /* ------------------------------------------------------------------------- */
@@ -148,6 +163,25 @@ struct nv_cuda_surface {
 	NV_ENC_INPUT_PTR *mapped_res;
 };
 
+/* Vulkan: an imported frame buffer, registered with NVENC */
+struct nv_vk_buffer {
+	uint64_t id;
+	CUexternalMemory mem;
+	CUdeviceptr ptr;
+	uint32_t pitch;
+	NV_ENC_REGISTERED_PTR reg;
+	/* libobs hands a frame over again when the renderer lags, so a buffer can be the input of several bitstream
+	 * slots at once: it stays mapped until the last of them is done. */
+	NV_ENC_INPUT_PTR mapped;
+	uint32_t map_count;
+};
+
+/* Vulkan: the input of a bitstream slot */
+struct nv_vk_input {
+	size_t buffer; /* index + 1 into vk.buffers; 0: none */
+	uint64_t release_value;
+};
+
 #ifdef _WIN32
 /* DX11 textures */
 struct nv_texture {
@@ -176,6 +210,17 @@ void d3d11_free_textures(struct nvenc_data *enc);
 
 bool d3d11_encode(void *data, struct encoder_texture *texture, int64_t pts, uint64_t lock_key, uint64_t *next_key,
 		  struct encoder_packet *packet, bool *received_packet);
+
+bool nvenc_encode_texture(void *data, struct encoder_texture *texture, int64_t pts, uint64_t lock_key,
+			  uint64_t *next_key, struct encoder_packet *packet, bool *received_packet);
+
+/** Vulkan (frames as handles) **/
+bool vulkan_cuda_ctx_init(struct nvenc_data *enc);
+bool vulkan_init_inputs(struct nvenc_data *enc);
+void vulkan_free(struct nvenc_data *enc);
+bool vulkan_release_input(struct nvenc_data *enc, size_t slot);
+bool vulkan_encode(void *data, struct encoder_texture *texture, int64_t pts, struct encoder_packet *packet,
+		   bool *received_packet);
 #endif
 
 /** CUDA **/

@@ -170,6 +170,17 @@ void d3d11_free_textures(struct nvenc_data *enc)
 /* ------------------------------------------------------------------------- */
 /* Actual encoding stuff                                                     */
 
+bool nvenc_encode_texture(void *data, struct encoder_texture *texture, int64_t pts, uint64_t lock_key,
+			  uint64_t *next_key, struct encoder_packet *packet, bool *received_packet)
+{
+	struct nvenc_data *enc = data;
+	if (enc->vulkan) {
+		*next_key = lock_key; /* no keyed mutex on Vulkan */
+		return vulkan_encode(data, texture, pts, packet, received_packet);
+	}
+	return d3d11_encode(data, texture, pts, lock_key, next_key, packet, received_packet);
+}
+
 static ID3D11Texture2D *get_tex_from_handle(struct nvenc_data *enc, uint32_t handle, IDXGIKeyedMutex **km_out)
 {
 	ID3D11Device *device = enc->device;

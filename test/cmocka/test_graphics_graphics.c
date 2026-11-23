@@ -68,6 +68,34 @@ static void info_test(void **state)
 	gs_register_loss_callbacks(&loss);
 	gs_unregister_loss_callbacks(NULL);
 #endif
+	/* external memory and sync: the null module reports everything unsupported, and the wrappers pass that on */
+	struct gs_adapter_identity id;
+	assert_false(gs_get_adapter_identity(&id));
+	assert_false(gs_get_adapter_identity(NULL));
+	assert_false(gs_shared_texture_supported(GS_HANDLE_WIN32, GS_SHARED_SINGLE, GS_BGRA, false));
+	gs_texture_t *ex = (gs_texture_t *)1, *ex_uv = (gs_texture_t *)1;
+	assert_false(gs_texture_create_exportable(16, 16, GS_BGRA, GS_SHARED_NV12, 0, &ex, &ex_uv));
+	assert_null(ex);
+	assert_null(ex_uv);
+	assert_false(gs_texture_create_exportable(16, 16, GS_BGRA, GS_SHARED_NV12, 0, &ex, NULL));
+	struct gs_shared_texture_desc desc = {0};
+	assert_false(gs_texture_import(&desc, &ex, NULL));
+	assert_false(gs_texture_export(NULL, GS_HANDLE_WIN32, &desc));
+	assert_null(gs_sharedbuf_create(16, 16, GS_SHARED_NV12));
+	gs_sharedbuf_destroy(NULL);
+	assert_null(gs_timeline_create(0));
+	struct gs_shared_handle h = {GS_HANDLE_WIN32_D3D11_KMT, (void *)4, -1};
+	assert_null(gs_timeline_import(&h));
+	assert_false(gs_timeline_signal(NULL, 1));
+	assert_int_equal(gs_timeline_wait_cpu(NULL, 1, 0), -1);
+	assert_false(gs_sync_file_export(&h));
+	assert_true(gs_test_calls("device_texture_create_exportable") == 1); /* the NULL tex_uv call never reaches it */
+	gs_shared_handle_close(&h);                                          /* KMT handles are names: only reset */
+	assert_int_equal(h.type, GS_HANDLE_NONE);
+	assert_null(h.win32);
+	assert_int_equal(h.fd, -1);
+	gs_shared_handle_close(NULL);
+
 	gs_debug_marker_begin(marker_color, "marker");
 	gs_debug_marker_begin_format(marker_color, "marker %d", 1);
 	gs_debug_marker_end();

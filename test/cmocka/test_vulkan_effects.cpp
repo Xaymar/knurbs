@@ -78,7 +78,7 @@ static bool start()
 	return true;
 }
 
-static void stop()
+static void stop_graphics()
 {
 	gs_leave_context();
 	gs_destroy(graphics);
@@ -133,7 +133,9 @@ static std::vector<std::string> all_effect_files()
 	add_effects(files, src + "/libobs/data");
 	add_effects(files, src + "/frontend/data");
 	add_effects(files, src + "/test/test-input/data");
-	os_dir_t *dir = os_opendir((src + "/plugins").c_str());
+	// platform-nix's os_opendir keeps the path pointer (no copy), so the string must outlive the walk.
+	const std::string plugins = src + "/plugins";
+	os_dir_t *dir = os_opendir(plugins.c_str());
 	if (dir) {
 		for (os_dirent *e; (e = os_readdir(dir));) {
 			if (e->directory && e->d_name[0] != '.') {
@@ -289,7 +291,7 @@ static void test_all_effects_compile(void **)
 		print_message("FAIL %s\n", f.c_str());
 	}
 	assert_int_equal(failed.size(), 0);
-	stop();
+	stop_graphics();
 }
 
 static void read_rgba(gs_texture_t *tex, uint32_t w, uint32_t h, std::vector<uint8_t> &out,
@@ -377,7 +379,7 @@ static void test_texrender_roundtrip(void **)
 	gs_texrender_destroy(tr);
 	gs_effect_destroy(solid);
 	gs_effect_destroy(def);
-	stop();
+	stop_graphics();
 }
 
 // A 2x2x2 volume texture sampled per slice with point filtering (color_grade_filter's clut_3d path).
@@ -432,7 +434,7 @@ static void test_volume_texture_samples_slices(void **)
 	gs_texture_destroy(out);
 	gs_voltexture_destroy(vol);
 	gs_effect_destroy(effect);
-	stop();
+	stop_graphics();
 }
 
 // gs_copy_texture (whole texture) and gs_copy_texture_region (a 2x2 block to an offset), as obs-video.c's encoder
@@ -467,7 +469,7 @@ static void test_copy_texture_and_region(void **)
 	gs_texture_destroy(src);
 	gs_texture_destroy(whole);
 	gs_texture_destroy(part);
-	stop();
+	stop_graphics();
 }
 
 int main()

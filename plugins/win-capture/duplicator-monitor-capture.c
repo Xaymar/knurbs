@@ -5,6 +5,7 @@
 #include <util/threading.h>
 
 #include "cursor-capture.h"
+#include "dxgi-duplicator.h"
 #ifdef OBS_LEGACY
 #include "../../libobs/util/platform.h"
 #include "../../libobs-winrt/winrt-capture.h"
@@ -89,7 +90,8 @@ struct duplicator_capture {
 	int rot;
 	uint32_t width;
 	uint32_t height;
-	gs_duplicator_t *duplicator;
+	gs_duplicator_t *duplicator;             /* D3D11: libobs's duplicator */
+	struct dxgi_duplicator *dxgi_duplicator; /* Vulkan: dxgi-duplicator.cpp */
 	float reset_timeout;
 	struct cursor_data cursor_data;
 
@@ -106,6 +108,76 @@ struct duplicator_monitor_info {
 	RECT rect;
 	HMONITOR handle;
 };
+
+/* ------------------------------------------------------------------------- */
+/* DXGI duplication: libobs's gs_duplicator on D3D11, dxgi-duplicator.cpp (a private D3D11 device of the monitor's
+ * adapter) on Vulkan. Graphics context entered. */
+
+extern bool graphics_uses_d3d11;
+
+static bool dup_exists(const struct duplicator_capture *capture)
+{
+	return capture->duplicator || capture->dxgi_duplicator;
+}
+
+/* Whether DXGI duplication reaches the renderer without going through the CPU. */
+static bool dup_monitor_on_renderer(HMONITOR monitor)
+{
+	return graphics_uses_d3d11 ? gs_duplicator_get_monitor_index(monitor) != -1
+				   : dxgi_duplicator_monitor_on_renderer(monitor);
+}
+
+/* Creates the duplication; `found` is false when the monitor was not found (on D3D11: on the renderer's adapter). */
+static bool dup_create(struct duplicator_capture *capture, bool *found)
+{
+	if (graphics_uses_d3d11) {
+		const int dxgi_index = gs_duplicator_get_monitor_index(capture->handle);
+		*found = dxgi_index != -1;
+		if (*found)
+			capture->duplicator = gs_duplicator_create(dxgi_index);
+	} else {
+		capture->dxgi_duplicator = dxgi_duplicator_create(capture->handle);
+		*found = true;
+	}
+	return dup_exists(capture);
+}
+
+static void dup_destroy(struct duplicator_capture *capture)
+{
+	if (capture->duplicator) {
+		gs_duplicator_destroy(capture->duplicator);
+		capture->duplicator = NULL;
+	}
+	if (capture->dxgi_duplicator) {
+		dxgi_duplicator_destroy(capture->dxgi_duplicator);
+		capture->dxgi_duplicator = NULL;
+	}
+}
+
+static bool dup_update_frame(struct duplicator_capture *capture)
+{
+	return capture->duplicator ? gs_duplicator_update_frame(capture->duplicator)
+				   : dxgi_duplicator_update_frame(capture->dxgi_duplicator);
+}
+
+/* For rendering. */
+static gs_texture_t *dup_get_texture(struct duplicator_capture *capture)
+{
+	return capture->duplicator ? gs_duplicator_get_texture(capture->duplicator)
+				   : dxgi_duplicator_get_texture(capture->dxgi_duplicator);
+}
+
+static enum gs_color_space dup_get_color_space(const struct duplicator_capture *capture)
+{
+	return capture->duplicator ? gs_duplicator_get_color_space(capture->duplicator)
+				   : dxgi_duplicator_get_color_space(capture->dxgi_duplicator);
+}
+
+static float dup_get_sdr_white_level(const struct duplicator_capture *capture)
+{
+	return capture->duplicator ? gs_duplicator_get_sdr_white_level(capture->duplicator)
+				   : dxgi_duplicator_get_sdr_white_level(capture->dxgi_duplicator);
+}
 
 /* ------------------------------------------------------------------------- */
 
@@ -257,10 +329,10 @@ static enum display_capture_method choose_method(enum display_capture_method met
 		method = METHOD_DXGI;
 
 		obs_enter_graphics();
-		const int dxgi_index = gs_duplicator_get_monitor_index(monitor);
+		const bool on_renderer = dup_monitor_on_renderer(monitor);
 		obs_leave_graphics();
 
-		if (dxgi_index == -1) {
+		if (!on_renderer) {
 			method = METHOD_WGC;
 		} else {
 			SYSTEM_POWER_STATUS status;
@@ -311,12 +383,9 @@ static inline void update_settings(struct duplicator_capture *capture, obs_data_
 	capture->logged_width = monitor.rect.right - monitor.rect.left;
 	capture->logged_height = monitor.rect.bottom - monitor.rect.top;
 
-	if (capture->duplicator) {
+	if (dup_exists(capture)) {
 		obs_enter_graphics();
-
-		gs_duplicator_destroy(capture->duplicator);
-		capture->duplicator = NULL;
-
+		dup_destroy(capture);
 		obs_leave_graphics();
 	}
 
@@ -349,10 +418,7 @@ static void duplicator_actual_destroy(void *data)
 
 	obs_enter_graphics();
 
-	if (capture->duplicator) {
-		gs_duplicator_destroy(capture->duplicator);
-		capture->duplicator = NULL;
-	}
+	dup_destroy(capture);
 
 	cursor_data_free(&capture->cursor_data);
 
@@ -420,7 +486,7 @@ static bool load_winrt_imports(struct winrt_exports *exports, void *module, cons
 	return success;
 }
 
-extern bool graphics_uses_d3d11;
+extern bool graphics_uses_winrt;
 
 static void *duplicator_capture_create(obs_data_t *settings, obs_source_t *source)
 {
@@ -431,7 +497,7 @@ static void *duplicator_capture_create(obs_data_t *settings, obs_source_t *sourc
 
 	pthread_mutex_init(&capture->update_mutex, NULL);
 
-	if (graphics_uses_d3d11) {
+	if (graphics_uses_winrt) {
 		static const char *const module = "libobs-winrt";
 		capture->winrt_module = os_dlopen(module);
 		if (capture->winrt_module) {
@@ -448,16 +514,21 @@ static void *duplicator_capture_create(obs_data_t *settings, obs_source_t *sourc
 static void reset_capture_data(struct duplicator_capture *capture)
 {
 	struct gs_monitor_info monitor_info = {0};
-	gs_texture_t *texture = gs_duplicator_get_texture(capture->duplicator);
+	capture->width = 0;
+	capture->height = 0;
 
-	const int dxgi_index = gs_duplicator_get_monitor_index(capture->handle);
-	gs_get_duplicator_monitor_info(dxgi_index, &monitor_info);
-	if (texture) {
-		capture->width = gs_texture_get_width(texture);
-		capture->height = gs_texture_get_height(texture);
+	if (capture->duplicator) {
+		gs_texture_t *texture = gs_duplicator_get_texture(capture->duplicator);
+
+		const int dxgi_index = gs_duplicator_get_monitor_index(capture->handle);
+		gs_get_duplicator_monitor_info(dxgi_index, &monitor_info);
+		if (texture) {
+			capture->width = gs_texture_get_width(texture);
+			capture->height = gs_texture_get_height(texture);
+		}
 	} else {
-		capture->width = 0;
-		capture->height = 0;
+		dxgi_duplicator_get_monitor_info(capture->dxgi_duplicator, &monitor_info);
+		dxgi_duplicator_get_size(capture->dxgi_duplicator, &capture->width, &capture->height);
 	}
 	capture->x = monitor_info.x;
 	capture->y = monitor_info.y;
@@ -471,10 +542,7 @@ static void free_capture_data(struct duplicator_capture *capture)
 		capture->capture_winrt = NULL;
 	}
 
-	if (capture->duplicator) {
-		gs_duplicator_destroy(capture->duplicator);
-		capture->duplicator = NULL;
-	}
+	dup_destroy(capture);
 
 	cursor_data_free(&capture->cursor_data);
 
@@ -555,7 +623,7 @@ static void duplicator_capture_tick(void *data, float seconds)
 			capture->capture_winrt = NULL;
 		}
 
-		if (!capture->duplicator) {
+		if (!dup_exists(capture)) {
 			capture->reset_timeout += seconds;
 
 			if (capture->reset_timeout >= RESET_INTERVAL_SEC) {
@@ -563,18 +631,13 @@ static void duplicator_capture_tick(void *data, float seconds)
 					update_monitor_handle(capture);
 
 				if (capture->handle) {
-					int dxgi_index = gs_duplicator_get_monitor_index(capture->handle);
-
-					if (dxgi_index == -1) {
+					bool found;
+					if (!dup_create(capture, &found) && !found) {
 						update_monitor_handle(capture);
 
 						if (capture->handle) {
-							dxgi_index = gs_duplicator_get_monitor_index(capture->handle);
+							dup_create(capture, &found);
 						}
-					}
-
-					if (dxgi_index != -1) {
-						capture->duplicator = gs_duplicator_create(dxgi_index);
 					}
 				}
 
@@ -582,11 +645,11 @@ static void duplicator_capture_tick(void *data, float seconds)
 			}
 		}
 
-		if (capture->duplicator) {
+		if (dup_exists(capture)) {
 			if (capture->capture_cursor)
 				cursor_capture(&capture->cursor_data);
 
-			if (!gs_duplicator_update_frame(capture->duplicator)) {
+			if (!dup_update_frame(capture)) {
 				free_capture_data(capture);
 
 			} else if (capture->width == 0) {
@@ -638,10 +701,10 @@ static void duplicator_capture_render(void *data, gs_effect_t *unused)
 			}
 		}
 	} else {
-		if (!capture->duplicator)
+		if (!dup_exists(capture))
 			return;
 
-		gs_texture_t *const texture = gs_duplicator_get_texture(capture->duplicator);
+		gs_texture_t *const texture = dup_get_texture(capture);
 		if (!texture)
 			return;
 
@@ -675,12 +738,12 @@ static void duplicator_capture_render(void *data, gs_effect_t *unused)
 		const char *tech_name = "Draw";
 		float multiplier = 1.f;
 		const enum gs_color_space current_space = gs_get_color_space();
-		if (gs_duplicator_get_color_space(capture->duplicator) == GS_CS_709_SCRGB) {
+		if (dup_get_color_space(capture) == GS_CS_709_SCRGB) {
 			if (capture->force_sdr) {
 				tech_name = "DrawMultiply";
 				const float target_nits =
 					(current_space == GS_CS_709_SCRGB) ? obs_get_video_sdr_white_level() : 80.f;
-				multiplier = target_nits / gs_duplicator_get_sdr_white_level(capture->duplicator);
+				multiplier = target_nits / dup_get_sdr_white_level(capture);
 			} else {
 				switch (current_space) {
 				case GS_CS_SRGB:
@@ -833,8 +896,8 @@ enum gs_color_space duplicator_capture_get_color_space(void *data, size_t count,
 		if (capture->capture_winrt) {
 			capture_space = capture->exports.winrt_capture_get_color_space(capture->capture_winrt);
 		}
-	} else if (capture->duplicator && !capture->force_sdr) {
-		capture_space = gs_duplicator_get_color_space(capture->duplicator);
+	} else if (dup_exists(capture) && !capture->force_sdr) {
+		capture_space = dup_get_color_space(capture);
 	}
 
 	enum gs_color_space space = capture_space;

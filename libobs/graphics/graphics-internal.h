@@ -218,6 +218,40 @@ struct gs_exports {
 
 	uint32_t (*gs_get_adapter_count)(void);
 
+	/* External memory and synchronisation, all optional */
+	bool (*device_get_adapter_identity)(gs_device_t *device, struct gs_adapter_identity *identity);
+	bool (*device_shared_texture_supported)(gs_device_t *device, enum gs_handle_type type,
+						enum gs_shared_layout layout, enum gs_color_format format, bool import);
+	bool (*device_texture_create_exportable)(gs_device_t *device, uint32_t width, uint32_t height,
+						 enum gs_color_format format, enum gs_shared_layout layout,
+						 uint32_t flags, gs_texture_t **tex, gs_texture_t **tex_uv);
+	bool (*device_texture_export)(gs_device_t *device, gs_texture_t *tex, enum gs_handle_type type,
+				      struct gs_shared_texture_desc *desc);
+	bool (*device_texture_import)(gs_device_t *device, const struct gs_shared_texture_desc *desc,
+				      gs_texture_t **tex, gs_texture_t **tex_uv);
+	gs_sharedbuf_t *(*device_sharedbuf_create)(gs_device_t *device, uint32_t width, uint32_t height,
+						   enum gs_shared_layout layout);
+	void (*gs_sharedbuf_destroy)(gs_sharedbuf_t *buf);
+	bool (*device_sharedbuf_copy_texture)(gs_device_t *device, gs_sharedbuf_t *buf, gs_texture_t *tex_y);
+	bool (*device_sharedbuf_export)(gs_device_t *device, gs_sharedbuf_t *buf, enum gs_handle_type type,
+					struct gs_shared_texture_desc *desc);
+	gs_timeline_t *(*device_timeline_create)(gs_device_t *device, uint64_t initial_value);
+	gs_timeline_t *(*device_timeline_import)(gs_device_t *device, const struct gs_shared_handle *handle);
+	bool (*device_timeline_export)(gs_device_t *device, gs_timeline_t *timeline, enum gs_handle_type type,
+				       struct gs_shared_handle *handle);
+	void (*gs_timeline_destroy)(gs_timeline_t *timeline);
+	bool (*device_timeline_signal)(gs_device_t *device, gs_timeline_t *timeline, uint64_t value);
+	bool (*device_timeline_wait)(gs_device_t *device, gs_timeline_t *timeline, uint64_t value);
+	uint64_t (*device_timeline_get_value)(gs_device_t *device, gs_timeline_t *timeline);
+	int (*device_timeline_wait_cpu)(gs_device_t *device, gs_timeline_t *timeline, uint64_t value,
+					uint64_t timeout_ns);
+	bool (*device_timeline_signal_cpu)(gs_device_t *device, gs_timeline_t *timeline, uint64_t value);
+	bool (*device_sync_file_export)(gs_device_t *device, struct gs_shared_handle *handle);
+	bool (*device_sync_file_wait)(gs_device_t *device, const struct gs_shared_handle *handle);
+
+	gs_stagesurf_t *(*device_stagesurface_create_nv12)(gs_device_t *device, uint32_t width, uint32_t height);
+	gs_stagesurf_t *(*device_stagesurface_create_p010)(gs_device_t *device, uint32_t width, uint32_t height);
+
 #ifdef __APPLE__
 	/* OSX/Cocoa specific functions */
 	gs_texture_t *(*device_texture_create_from_iosurface)(gs_device_t *dev, void *iosurf);
@@ -255,8 +289,6 @@ struct gs_exports {
 	int (*device_texture_acquire_sync)(gs_texture_t *tex, uint64_t key, uint32_t ms);
 	int (*device_texture_release_sync)(gs_texture_t *tex, uint64_t key);
 
-	gs_stagesurf_t *(*device_stagesurface_create_nv12)(gs_device_t *device, uint32_t width, uint32_t height);
-	gs_stagesurf_t *(*device_stagesurface_create_p010)(gs_device_t *device, uint32_t width, uint32_t height);
 	void (*device_register_loss_callbacks)(gs_device_t *device, const struct gs_device_loss *callbacks);
 	void (*device_unregister_loss_callbacks)(gs_device_t *device, void *data);
 #elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)

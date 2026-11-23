@@ -133,6 +133,36 @@ EXPORT bool device_shared_texture_available(void);
 EXPORT bool device_nv12_available(gs_device_t *device);
 EXPORT bool device_p010_available(gs_device_t *device);
 
+/* External memory and synchronisation (optional imports, docs/graphics-interop.md) */
+EXPORT bool device_get_adapter_identity(gs_device_t *device, struct gs_adapter_identity *identity);
+EXPORT bool device_shared_texture_supported(gs_device_t *device, enum gs_handle_type type, enum gs_shared_layout layout,
+					    enum gs_color_format format, bool import);
+EXPORT bool device_texture_create_exportable(gs_device_t *device, uint32_t width, uint32_t height,
+					     enum gs_color_format format, enum gs_shared_layout layout, uint32_t flags,
+					     gs_texture_t **tex, gs_texture_t **tex_uv);
+EXPORT bool device_texture_export(gs_device_t *device, gs_texture_t *tex, enum gs_handle_type type,
+				  struct gs_shared_texture_desc *desc);
+EXPORT bool device_texture_import(gs_device_t *device, const struct gs_shared_texture_desc *desc, gs_texture_t **tex,
+				  gs_texture_t **tex_uv);
+EXPORT gs_sharedbuf_t *device_sharedbuf_create(gs_device_t *device, uint32_t width, uint32_t height,
+					       enum gs_shared_layout layout);
+EXPORT void gs_sharedbuf_destroy(gs_sharedbuf_t *buf);
+EXPORT bool device_sharedbuf_copy_texture(gs_device_t *device, gs_sharedbuf_t *buf, gs_texture_t *tex_y);
+EXPORT bool device_sharedbuf_export(gs_device_t *device, gs_sharedbuf_t *buf, enum gs_handle_type type,
+				    struct gs_shared_texture_desc *desc);
+EXPORT gs_timeline_t *device_timeline_create(gs_device_t *device, uint64_t initial_value);
+EXPORT gs_timeline_t *device_timeline_import(gs_device_t *device, const struct gs_shared_handle *handle);
+EXPORT bool device_timeline_export(gs_device_t *device, gs_timeline_t *timeline, enum gs_handle_type type,
+				   struct gs_shared_handle *handle);
+EXPORT void gs_timeline_destroy(gs_timeline_t *timeline);
+EXPORT bool device_timeline_signal(gs_device_t *device, gs_timeline_t *timeline, uint64_t value);
+EXPORT bool device_timeline_wait(gs_device_t *device, gs_timeline_t *timeline, uint64_t value);
+EXPORT uint64_t device_timeline_get_value(gs_device_t *device, gs_timeline_t *timeline);
+EXPORT int device_timeline_wait_cpu(gs_device_t *device, gs_timeline_t *timeline, uint64_t value, uint64_t timeout_ns);
+EXPORT bool device_timeline_signal_cpu(gs_device_t *device, gs_timeline_t *timeline, uint64_t value);
+EXPORT bool device_sync_file_export(gs_device_t *device, struct gs_shared_handle *handle);
+EXPORT bool device_sync_file_wait(gs_device_t *device, const struct gs_shared_handle *handle);
+
 #ifdef __APPLE__
 EXPORT gs_texture_t *device_texture_create_from_iosurface(gs_device_t *device, void *iosurf);
 EXPORT gs_texture_t *device_texture_open_shared(gs_device_t *device, uint32_t handle);

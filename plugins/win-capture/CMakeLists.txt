@@ -13,8 +13,16 @@ option(ENABLE_COMPAT_UPDATES "Checks for capture compatibility data updates" ON)
 set(COMPAT_URL "https://obsproject.com/obs2_update/win-capture" CACHE STRING "Default services package URL")
 mark_as_advanced(COMPAT_URL)
 
+if(NOT TARGET OBS::hook-config)
+  add_subdirectory("${CMAKE_SOURCE_DIR}/shared/obs-hook-config" "${CMAKE_BINARY_DIR}/shared/obs-hook-config")
+endif()
+
 if(NOT TARGET OBS::ipc-util)
   add_subdirectory("${CMAKE_SOURCE_DIR}/shared/ipc-util" "${CMAKE_BINARY_DIR}/shared/ipc-util")
+endif()
+
+if(NOT TARGET OBS::d3d11-vulkan-bridge)
+  add_subdirectory("${CMAKE_SOURCE_DIR}/shared/d3d11-vulkan-bridge" "${CMAKE_BINARY_DIR}/shared/d3d11-vulkan-bridge")
 endif()
 
 if(NOT TARGET OBS::file-updater)
@@ -41,7 +49,11 @@ target_sources(
     dc-capture.c
     dc-capture.h
     duplicator-monitor-capture.c
+    dxgi-duplicator.cpp
+    dxgi-duplicator.h
     game-capture-file-init.c
+    game-capture-hook-install.c
+    game-capture-hook-install.h
     game-capture.c
     load-graphics-offsets.c
     monitor-capture.c
@@ -62,6 +74,7 @@ target_compile_definitions(
 target_link_libraries(
   win-capture
   PRIVATE
+    OBS::d3d11-vulkan-bridge
     OBS::file-updater
     OBS::hook-config
     OBS::inject-library
@@ -71,6 +84,8 @@ target_link_libraries(
     OBS::w32-pthreads
     OBS::winrt-headers
     jansson::jansson
+    crypt32
+    wintrust
 )
 
 # Remove once jansson has been fixed on obs-deps
@@ -81,6 +96,7 @@ target_sources(win-capture PRIVATE win-capture.rc)
 
 set_target_properties_obs(win-capture PROPERTIES FOLDER plugins/win-capture PREFIX "")
 
-add_subdirectory(graphics-hook)
-add_subdirectory(get-graphics-offsets)
-add_subdirectory(inject-helper)
+# graphics-hook, inject-helper and get-graphics-offsets are OBS Studio's signed release binaries, not built here (the
+# sources in those directories are kept for reference only): see cmake/obs-hook.cmake.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/obs-hook.cmake")
+obs_hook_add_resources(win-capture)

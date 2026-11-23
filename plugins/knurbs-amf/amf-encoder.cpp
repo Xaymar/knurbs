@@ -17,6 +17,10 @@
 #include <AMF/components/VideoEncoderAV1.h>
 #include <AMF/core/Factory.h>
 #include <AMF/core/Trace.h>
+#ifdef ENABLE_AMF_VULKAN
+#include <AMF/core/VulkanAMF.h>
+#include "amf-encoder-vulkan.hpp"
+#endif
 
 #include <dxgi.h>
 #include <d3d11.h>
@@ -210,8 +214,35 @@ struct amf_texencode : amf_base, public AMFSurfaceObserver {
 	ComPtr<ID3D11Device> device;
 	ComPtr<ID3D11DeviceContext> context;
 
+	/* Vulkan renderer: frames arrive as handles and are imported into a device of our own (amf-encoder-vulkan) */
+	bool vulkan = false;
+#ifdef ENABLE_AMF_VULKAN
+	std::unique_ptr<amf_vulkan> vk;
+#endif
+
 	inline amf_texencode() : amf_base(false) {}
-	~amf_texencode() { os_atomic_set_bool(&destroying, true); }
+	~amf_texencode()
+	{
+		os_atomic_set_bool(&destroying, true);
+#ifdef ENABLE_AMF_VULKAN
+		if (vk) {
+			/* AMF uses our device: it has to be gone before the device is */
+			queued_packets.clear();
+			packet_data = nullptr;
+			header = nullptr;
+			roi_map = nullptr;
+			if (amf_encoder) {
+				amf_encoder->Terminate();
+				amf_encoder = nullptr;
+			}
+			if (amf_context) {
+				amf_context->Terminate();
+				amf_context = nullptr;
+			}
+			vk.reset();
+		}
+#endif
+	}
 
 	void AMF_STD_CALL OnSurfaceDataRelease(amf::AMFSurface *surf) override
 	{
@@ -220,6 +251,11 @@ struct amf_texencode : amf_base, public AMFSurfaceObserver {
 		}
 
 		std::scoped_lock lock(textures_mutex);
+
+		/* Vulkan: AMF's surfaces are kept and resubmitted, so this never fires for them (amf_vulkan::collect) */
+		if (vulkan) {
+			return;
+		}
 
 		auto it = active_textures.find(surf);
 		if (it != active_textures.end()) {
@@ -230,6 +266,28 @@ struct amf_texencode : amf_base, public AMFSurfaceObserver {
 
 	void init() override
 	{
+#ifdef ENABLE_AMF_VULKAN
+		if (vulkan) {
+			/* InitVulkan(nullptr) fails: AMF needs a device made with its extensions */
+			AMFContext1Ptr context1(amf_context);
+			amf_size count = 0;
+			AMF_RESULT res = context1->GetVulkanDeviceExtensions(&count, nullptr);
+			std::vector<const char *> extensions(count);
+			if (res == AMF_OK && count) {
+				res = context1->GetVulkanDeviceExtensions(&count, extensions.data());
+			}
+			if (res != AMF_OK) {
+				throw amf_error("GetVulkanDeviceExtensions failed", res);
+			}
+			vk = std::make_unique<amf_vulkan>(extensions,
+							  obs_encoder_video_tex_active(encoder, VIDEO_FORMAT_P010));
+			res = context1->InitVulkan(vk->amf_device());
+			if (res != AMF_OK) {
+				throw amf_error("InitVulkan failed", res);
+			}
+			return;
+		}
+#endif
 		AMF_RESULT res = amf_context->InitDX11(device, AMF_DX11_1);
 		if (res != AMF_OK) {
 			throw amf_error("InitDX11 failed", res);
@@ -388,6 +446,31 @@ try {
 } catch (const char *err) {
 	error("%s: %s", __FUNCTION__, err);
 	return false;
+}
+
+/* D3D11 for the D3D11 renderer; on Vulkan the device is made in init(), once AMF says which extensions it needs. */
+static bool amf_init_texture(amf_texencode *enc)
+{
+	obs_enter_graphics();
+	const bool vulkan = gs_get_device_type() == GS_DEVICE_VULKAN;
+	obs_leave_graphics();
+	if (!vulkan) {
+		return amf_init_d3d11(enc);
+	}
+#ifdef ENABLE_AMF_VULKAN
+	/* OBS_AMF_VULKAN_TEXTURE=0 forces the non-texture encoder (amf-encoder-vulkan.hpp: AMF's stale-frame bug
+	 * and how this path avoids it). */
+	const char *opt = getenv("OBS_AMF_VULKAN_TEXTURE");
+	if (opt && strcmp(opt, "0") == 0) {
+		info("%s: texture encoding on Vulkan is off (OBS_AMF_VULKAN_TEXTURE=0)", __FUNCTION__);
+		return false;
+	}
+	enc->vulkan = true;
+	return true;
+#else
+	error("%s: built without Vulkan support", __FUNCTION__);
+	return false;
+#endif
 }
 
 static void add_output_tex(amf_texencode *enc, ComPtr<ID3D11Texture2D> &output_tex, ID3D11Texture2D *from)
@@ -899,6 +982,48 @@ try {
 	return false;
 }
 
+/* Vulkan: each libobs image is imported once and has its own AMF surface, resubmitted every time (zero copy). libobs
+ * takes a frame back once AMF gave its surface back (amf_vulkan::collect signals the release timeline). */
+static bool amf_encode_tex2(void *data, struct encoder_texture *texture, int64_t pts, uint64_t lock_key,
+			    uint64_t *next_key, encoder_packet *packet, bool *received_packet)
+{
+	amf_texencode *enc = (amf_texencode *)data;
+	if (!enc->vulkan) {
+		return amf_encode_tex(data, texture->handle, pts, lock_key, next_key, packet, received_packet);
+	}
+	*next_key = lock_key; /* no keyed mutex on Vulkan */
+	*received_packet = false;
+#ifdef ENABLE_AMF_VULKAN
+	try {
+		if (!texture->shared) {
+			throw "libobs gave no shared frame";
+		}
+		AMFContext1Ptr context1(enc->amf_context);
+		AMFSurface *amf_surf = enc->vk->surface(*texture->shared, context1);
+
+		amf_surf->SetPts(convert_to_amf_ts(enc, pts));
+		amf_surf->SetProperty(L"PTS", pts);
+
+		amf_encode_base(enc, amf_surf, packet, received_packet);
+		enc->vk->collect(); /* the inputs of the packets just received */
+		return true;
+
+	} catch (const char *err) {
+		error("%s: %s", __FUNCTION__, err);
+		return false;
+
+	} catch (const amf_error &err) {
+		error("%s: %s: %ls", __FUNCTION__, err.str, amf_trace->GetResultText(err.res));
+		*received_packet = false;
+		return false;
+	}
+#else
+	UNUSED_PARAMETER(pts);
+	UNUSED_PARAMETER(packet);
+	return false;
+#endif
+}
+
 static buf_t alloc_buf(amf_fallback *enc)
 {
 	buf_t buf;
@@ -1213,8 +1338,28 @@ static void check_texture_encode_capability(obs_encoder_t *encoder, amf_codec_ty
 		}
 	}
 
-	if ((avc && !caps[ovi.adapter].supports_avc) || (hevc && !caps[ovi.adapter].supports_hevc) ||
-	    (av1 && !caps[ovi.adapter].supports_av1)) {
+	/* The probe's results are in DXGI adapter order; Vulkan's adapter index means something else. */
+	uint32_t adapter = ovi.adapter;
+	obs_enter_graphics();
+	const bool vulkan = gs_get_device_type() == GS_DEVICE_VULKAN;
+#ifdef ENABLE_AMF_VULKAN
+	uint32_t vendor = 0;
+	const int dxgi_index = vulkan ? amf_vulkan_renderer_dxgi_index(&vendor) : -1;
+#endif
+	obs_leave_graphics();
+	if (vulkan) {
+#ifdef ENABLE_AMF_VULKAN
+		if (dxgi_index < 0 || vendor != AMD_VENDOR_ID) {
+			throw "The renderer is not on an AMD adapter";
+		}
+		adapter = (uint32_t)dxgi_index;
+#else
+		throw "Built without Vulkan support";
+#endif
+	}
+
+	if ((avc && !caps[adapter].supports_avc) || (hevc && !caps[adapter].supports_hevc) ||
+	    (av1 && !caps[adapter].supports_av1)) {
 		throw "Wrong adapter";
 	}
 }
@@ -1738,8 +1883,8 @@ try {
 	enc->encoder = encoder;
 	enc->encoder_str = "texture-amf-h264";
 
-	if (!amf_init_d3d11(enc.get())) {
-		throw "Failed to create D3D11";
+	if (!amf_init_texture(enc.get())) {
+		throw "No texture encoding on this renderer";
 	}
 
 	amf_avc_create_internal(enc.get(), settings);
@@ -1809,11 +1954,13 @@ static void register_avc()
 	amf_encoder_info.destroy = amf_destroy;
 	amf_encoder_info.update = amf_avc_update;
 	amf_encoder_info.encode_texture = amf_encode_tex;
+	amf_encoder_info.encode_texture2 = amf_encode_tex2;
 	amf_encoder_info.get_defaults = amf_avc_defaults;
 	amf_encoder_info.get_properties = amf_avc_properties;
 	amf_encoder_info.get_extra_data = amf_extra_data;
-	amf_encoder_info.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_DYN_BITRATE |
-				OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE | OBS_ENCODER_CAP_ROI;
+	amf_encoder_info.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_SHARED_HANDLES |
+				OBS_ENCODER_CAP_DYN_BITRATE | OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE |
+				OBS_ENCODER_CAP_ROI;
 
 	obs_register_encoder(&amf_encoder_info);
 
@@ -1821,6 +1968,7 @@ static void register_avc()
 	amf_encoder_info.caps = OBS_ENCODER_CAP_INTERNAL | OBS_ENCODER_CAP_DYN_BITRATE |
 				OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE | OBS_ENCODER_CAP_ROI;
 	amf_encoder_info.encode_texture = nullptr;
+	amf_encoder_info.encode_texture2 = nullptr;
 	amf_encoder_info.create = amf_avc_create_fallback;
 	amf_encoder_info.encode = amf_encode_fallback;
 	amf_encoder_info.get_video_info = h264_video_info_fallback;
@@ -2142,8 +2290,8 @@ try {
 	enc->encoder = encoder;
 	enc->encoder_str = "texture-amf-h265";
 
-	if (!amf_init_d3d11(enc.get())) {
-		throw "Failed to create D3D11";
+	if (!amf_init_texture(enc.get())) {
+		throw "No texture encoding on this renderer";
 	}
 
 	amf_hevc_create_internal(enc.get(), settings);
@@ -2220,11 +2368,13 @@ static void register_hevc()
 	amf_encoder_info.destroy = amf_destroy;
 	amf_encoder_info.update = amf_hevc_update;
 	amf_encoder_info.encode_texture = amf_encode_tex;
+	amf_encoder_info.encode_texture2 = amf_encode_tex2;
 	amf_encoder_info.get_defaults = amf_hevc_defaults;
 	amf_encoder_info.get_properties = amf_hevc_properties;
 	amf_encoder_info.get_extra_data = amf_extra_data;
-	amf_encoder_info.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_DYN_BITRATE |
-				OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE | OBS_ENCODER_CAP_ROI;
+	amf_encoder_info.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_SHARED_HANDLES |
+				OBS_ENCODER_CAP_DYN_BITRATE | OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE |
+				OBS_ENCODER_CAP_ROI;
 
 	obs_register_encoder(&amf_encoder_info);
 
@@ -2232,6 +2382,7 @@ static void register_hevc()
 	amf_encoder_info.caps = OBS_ENCODER_CAP_INTERNAL | OBS_ENCODER_CAP_DYN_BITRATE |
 				OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE | OBS_ENCODER_CAP_ROI;
 	amf_encoder_info.encode_texture = nullptr;
+	amf_encoder_info.encode_texture2 = nullptr;
 	amf_encoder_info.create = amf_hevc_create_fallback;
 	amf_encoder_info.encode = amf_encode_fallback;
 	amf_encoder_info.get_video_info = h265_video_info_fallback;
@@ -2555,8 +2706,8 @@ try {
 	enc->encoder = encoder;
 	enc->encoder_str = "texture-amf-av1";
 
-	if (!amf_init_d3d11(enc.get())) {
-		throw "Failed to create D3D11";
+	if (!amf_init_texture(enc.get())) {
+		throw "No texture encoding on this renderer";
 	}
 
 	amf_av1_create_internal(enc.get(), settings);
@@ -2635,11 +2786,13 @@ static void register_av1()
 	amf_encoder_info.destroy = amf_destroy;
 	amf_encoder_info.update = amf_av1_update;
 	amf_encoder_info.encode_texture = amf_encode_tex;
+	amf_encoder_info.encode_texture2 = amf_encode_tex2;
 	amf_encoder_info.get_defaults = amf_av1_defaults;
 	amf_encoder_info.get_properties = amf_av1_properties;
 	amf_encoder_info.get_extra_data = amf_extra_data;
-	amf_encoder_info.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_DYN_BITRATE |
-				OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE | OBS_ENCODER_CAP_ROI;
+	amf_encoder_info.caps = OBS_ENCODER_CAP_PASS_TEXTURE | OBS_ENCODER_CAP_SHARED_HANDLES |
+				OBS_ENCODER_CAP_DYN_BITRATE | OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE |
+				OBS_ENCODER_CAP_ROI;
 
 	obs_register_encoder(&amf_encoder_info);
 
@@ -2647,6 +2800,7 @@ static void register_av1()
 	amf_encoder_info.caps = OBS_ENCODER_CAP_INTERNAL | OBS_ENCODER_CAP_DYN_BITRATE |
 				OBS_ENCODER_CAP_MULTITRACK_DYN_BITRATE | OBS_ENCODER_CAP_ROI;
 	amf_encoder_info.encode_texture = nullptr;
+	amf_encoder_info.encode_texture2 = nullptr;
 	amf_encoder_info.create = amf_av1_create_fallback;
 	amf_encoder_info.encode = amf_encode_fallback;
 	amf_encoder_info.get_video_info = av1_video_info_fallback;
@@ -2780,8 +2934,15 @@ try {
 	}
 
 #ifndef DEBUG_AMF_STUFF
+	/* OBS_AMF_TRACE=1: AMF's own trace on the console, for what its result codes do not say */
+	const char *trace = getenv("OBS_AMF_TRACE");
+	const bool trace_on = trace && !strcmp(trace, "1");
 	amf_trace->EnableWriter(AMF_TRACE_WRITER_DEBUG_OUTPUT, false);
-	amf_trace->EnableWriter(AMF_TRACE_WRITER_CONSOLE, false);
+	amf_trace->EnableWriter(AMF_TRACE_WRITER_CONSOLE, trace_on);
+	if (trace_on) {
+		amf_trace->SetGlobalLevel(AMF_TRACE_DEBUG);
+		amf_trace->SetWriterLevel(AMF_TRACE_WRITER_CONSOLE, AMF_TRACE_DEBUG);
+	}
 #endif
 
 	/* ----------------------------------- */

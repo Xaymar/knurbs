@@ -9,6 +9,8 @@
 #include <util/c99defs.h>
 #include <util/base.h>
 
+#include "game-capture-hook-install.h"
+
 /* ------------------------------------------------------------------------- */
 /* helper funcs                                                              */
 
@@ -201,15 +203,9 @@ static bool update_hook_file(bool b64)
 	make_filename(dst_json, L"obs-vulkan", L".json");
 	make_filename(dst, L"graphics-hook", L".dll");
 
-	if (!file_exists(src)) {
-		warn("source graphics-hook%d.dll missing", b64 ? 64 : 32);
-		return false;
-	}
-	if (!file_exists(src_json)) {
-		warn("source obs-vulkan%d.json missing", b64 ? 64 : 32);
-		return false;
-	}
-	if (!file_exists(dst) || !file_exists(dst_json)) {
+	/* Only a hook signed by OBS Project, LLC goes into (or is used from) the shared directory, never a downgrade:
+	 * see game-capture-hook-install.h. The directory is created only for a hook that will be installed. */
+	if (hook_signed_by_obs(src) && file_exists(src_json)) {
 		if (!CreateDirectoryW(temp, NULL)) {
 			DWORD err = GetLastError();
 			if (err != ERROR_ALREADY_EXISTS) {
@@ -219,58 +215,9 @@ static bool update_hook_file(bool b64)
 		}
 		if (has_elevation())
 			add_aap_perms(temp);
-		if (!CopyFileW(src_json, dst_json, false)) {
-			warn("failed to install %ls (%lu)", dst_json, GetLastError());
-			return false;
-		}
-		if (!CopyFileW(src, dst, false)) {
-			warn("failed to install %ls (%lu)", dst, GetLastError());
-			return false;
-		}
-		return true;
 	}
 
-	if (has_elevation())
-		add_aap_perms(temp);
-
-	struct win_version_info ver_src = {0};
-	struct win_version_info ver_dst = {0};
-	if (!get_dll_ver(src, &ver_src)) {
-		warn("failed to get version of source");
-		return false;
-	}
-#ifndef _DEBUG
-	if (!get_dll_ver(dst, &ver_dst)) {
-		warn("failed to get version of %ls", dst);
-		return false;
-	}
-#endif
-
-	/* if source is greater than dst, overwrite new file  */
-	while (win_version_compare(&ver_dst, &ver_src) < 0) {
-		if (!CopyFileW(src_json, dst_json, false)) {
-			warn("failed to update %ls (%lu)", dst_json, GetLastError());
-			return false;
-		}
-		if (!CopyFileW(src, dst, false)) {
-			warn("failed to update %ls (%lu)", dst, GetLastError());
-			return false;
-		}
-
-		if (!get_dll_ver(dst, &ver_dst)) {
-			warn("failed to get version of %ls", dst);
-			return false;
-		}
-	}
-
-	/* do not use if major version incremented in target compared to
-	 * ours */
-	if (ver_dst.major > ver_src.major) {
-		warn("target %ls has major version %d, source has major version %d", dst, ver_dst.major, ver_src.major);
-		return false;
-	}
-
-	return true;
+	return hook_install_files(src, src_json, dst, dst_json);
 }
 
 #undef warn

@@ -71,6 +71,21 @@ static const cuda_function cuda_functions[] = {
 
 static const size_t num_cuda_funcs = sizeof(cuda_functions) / sizeof(cuda_function);
 
+/* Only the Vulkan texture path needs these; it checks for them. */
+static const cuda_function cuda_optional_functions[] = {
+	{offsetof(CudaFunctions, cuDeviceGetUuid), "cuDeviceGetUuid"},
+	{offsetof(CudaFunctions, cuStreamCreate), "cuStreamCreate"},
+	{offsetof(CudaFunctions, cuStreamSynchronize), "cuStreamSynchronize"},
+	{offsetof(CudaFunctions, cuStreamDestroy), "cuStreamDestroy_v2"},
+	{offsetof(CudaFunctions, cuImportExternalMemory), "cuImportExternalMemory"},
+	{offsetof(CudaFunctions, cuDestroyExternalMemory), "cuDestroyExternalMemory"},
+	{offsetof(CudaFunctions, cuExternalMemoryGetMappedBuffer), "cuExternalMemoryGetMappedBuffer"},
+	{offsetof(CudaFunctions, cuImportExternalSemaphore), "cuImportExternalSemaphore"},
+	{offsetof(CudaFunctions, cuDestroyExternalSemaphore), "cuDestroyExternalSemaphore"},
+	{offsetof(CudaFunctions, cuSignalExternalSemaphoresAsync), "cuSignalExternalSemaphoresAsync"},
+	{offsetof(CudaFunctions, cuWaitExternalSemaphoresAsync), "cuWaitExternalSemaphoresAsync"},
+};
+
 static bool init_cuda_internal(obs_encoder_t *encoder)
 {
 	static bool initialized = false;
@@ -98,6 +113,21 @@ static bool init_cuda_internal(obs_encoder_t *encoder)
 		}
 
 		*(uintptr_t *)((uintptr_t)cu + func.offset) = (uintptr_t)fptr;
+	}
+
+	bool optional = true;
+	for (size_t idx = 0; idx < sizeof(cuda_optional_functions) / sizeof(cuda_function); idx++) {
+		const cuda_function func = cuda_optional_functions[idx];
+		void *fptr = os_dlsym(cuda_lib, func.name);
+		optional = optional && fptr;
+		*(uintptr_t *)((uintptr_t)cu + func.offset) = (uintptr_t)fptr;
+	}
+	if (!optional) {
+		/* all or nothing: the Vulkan path checks only cuDeviceGetUuid and the imports */
+		cu->cuDeviceGetUuid = NULL;
+		cu->cuImportExternalMemory = NULL;
+		cu->cuImportExternalSemaphore = NULL;
+		blog(LOG_INFO, "[knurbs-nvenc] CUDA external memory unavailable: no texture encoding on Vulkan");
 	}
 
 	success = true;
