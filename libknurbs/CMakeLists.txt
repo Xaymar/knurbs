@@ -19,7 +19,7 @@ include(GNUInstallDirs)
 add_library(libknurbs SHARED)
 add_library(knurbs::knurbs ALIAS libknurbs)
 
-target_sources(libknurbs PRIVATE source/version.cpp)
+target_sources(libknurbs PRIVATE source/error.cpp source/version.cpp)
 
 target_include_directories(
   libknurbs

@@ -44,3 +44,4 @@ function(knurbs_add_test name)
 endfunction()
 
 knurbs_add_test(test_version)
+knurbs_add_test(test_error)
