@@ -47,7 +47,11 @@ static void read_pipe_test(void **state)
 {
 	UNUSED_PARAMETER(state);
 
+#ifdef _WIN32
 	os_process_pipe_t *pp = os_process_pipe_create("cmd.exe /c echo out& echo err 1>&2& exit 3", "r");
+#else
+	os_process_pipe_t *pp = os_process_pipe_create("echo out; echo err 1>&2; exit 3", "r");
+#endif
 	assert_non_null(pp);
 	char buf[256];
 	read_all(pp, buf, sizeof(buf), false);
@@ -63,15 +67,23 @@ static void write_pipe_test(void **state)
 {
 	UNUSED_PARAMETER(state);
 
-	/* findstr echoes matching stdin lines to stdout, which is not captured for write pipes */
+	/* the filter exits with 0 only if it read the line written to its stdin */
+#ifdef _WIN32
 	os_process_args_t *args = os_process_args_create("cmd.exe");
 	os_process_args_add_arg(args, "/c");
 	os_process_args_add_arg(args, "findstr x >NUL");
+	const char *line = "x\r\n";
+#else
+	os_process_args_t *args = os_process_args_create("/bin/sh");
+	os_process_args_add_arg(args, "-c");
+	os_process_args_add_arg(args, "grep x >/dev/null");
+	const char *line = "x\n";
+#endif
 	os_process_pipe_t *pp = os_process_pipe_create2(args, "w");
 	os_process_args_destroy(args);
 	assert_non_null(pp);
 
-	assert_int_equal(os_process_pipe_write(pp, (const uint8_t *)"x\r\n", 3), 3);
+	assert_int_equal(os_process_pipe_write(pp, (const uint8_t *)line, strlen(line)), strlen(line));
 	uint8_t byte;
 	assert_int_equal(os_process_pipe_read(pp, &byte, 1), 0);
 	assert_int_equal(os_process_pipe_destroy(pp), 0);
@@ -82,9 +94,17 @@ static void quoting_test(void **state)
 	UNUSED_PARAMETER(state);
 
 	/* arguments with spaces, quotes, tabs and trailing backslashes survive the command line */
+#ifdef _WIN32
 	os_process_args_t *args = os_process_args_create("cmd.exe");
 	os_process_args_add_arg(args, "/c");
 	os_process_args_add_arg(args, "echo");
+#else
+	/* argv is passed to the program as it is; the shell prints each argument in brackets */
+	os_process_args_t *args = os_process_args_create("/bin/sh");
+	os_process_args_add_arg(args, "-c");
+	os_process_args_add_arg(args, "printf '[%s]' \"$@\"");
+	os_process_args_add_arg(args, "sh");
+#endif
 	os_process_args_add_arg(args, "a b");
 	os_process_args_add_arg(args, "q\"uote");
 	os_process_args_add_arg(args, "back\\\\\"slash");
@@ -96,20 +116,46 @@ static void quoting_test(void **state)
 
 	char buf[256];
 	read_all(pp, buf, sizeof(buf), false);
+#ifdef _WIN32
 	/* cmd's echo prints the raw command line */
 	assert_non_null(strstr(buf, "\"a b\""));
 	assert_non_null(strstr(buf, "q\\\"uote"));
-	os_process_pipe_destroy(pp);
+#else
+	assert_string_equal(buf, "[a b][q\"uote][back\\\\\"slash][tab\there\\][]");
+#endif
+	assert_int_equal(os_process_pipe_destroy(pp), 0);
 }
 
 static void error_test(void **state)
 {
 	UNUSED_PARAMETER(state);
 
+#ifdef _WIN32
+	const char *shell = "cmd.exe";
+	const char *missing = "no-such-program-for-obs-tests.exe";
+#else
+	const char *shell = "/bin/sh";
+	const char *missing = "/no-such-dir/no-such-program-for-obs-tests";
+#endif
 	assert_null(os_process_pipe_create(NULL, "r"));
-	assert_null(os_process_pipe_create("cmd.exe", NULL));
-	assert_null(os_process_pipe_create("cmd.exe", "x"));
-	assert_null(os_process_pipe_create("no-such-program-for-obs-tests.exe", "r"));
+	assert_null(os_process_pipe_create(shell, NULL));
+	assert_null(os_process_pipe_create(shell, "x"));
+#ifdef _WIN32
+	assert_null(os_process_pipe_create(missing, "r"));
+#else
+	/* the command line runs through /bin/sh, which starts and reports a missing program as exit code 127 */
+	os_process_pipe_t *pp = os_process_pipe_create(missing, "r");
+	assert_non_null(pp);
+	/* read the shell's complaint first: destroy closes stderr, and a shell writing to it then dies of SIGPIPE */
+	char buf[256];
+	read_all(pp, buf, sizeof(buf), true);
+	assert_non_null(strstr(buf, "no-such-program-for-obs-tests"));
+	assert_int_equal(os_process_pipe_destroy(pp), 127);
+#endif
+	os_process_args_t *args = os_process_args_create(missing);
+	assert_null(os_process_pipe_create2(args, "r"));
+	assert_null(os_process_pipe_create2(args, "x"));
+	os_process_args_destroy(args);
 
 	uint8_t byte;
 	assert_int_equal(os_process_pipe_read(NULL, &byte, 1), 0);
