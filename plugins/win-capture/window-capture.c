@@ -298,7 +298,7 @@ static bool load_winrt_imports(struct winrt_exports *exports, void *module, cons
 	return success;
 }
 
-extern bool graphics_uses_d3d11;
+extern bool graphics_uses_winrt;
 static void wc_update(void *data, obs_data_t *settings);
 
 static void *wc_create(obs_data_t *settings, obs_source_t *source)
@@ -308,7 +308,7 @@ static void *wc_create(obs_data_t *settings, obs_source_t *source)
 
 	pthread_mutex_init(&wc->update_mutex, NULL);
 
-	if (graphics_uses_d3d11) {
+	if (graphics_uses_winrt) {
 		static const char *const module = "libobs-winrt";
 		wc->winrt_module = os_dlopen(module);
 		if (wc->winrt_module) {

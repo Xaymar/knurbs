@@ -99,6 +99,7 @@ static bool confirm_compat_file(void *param, struct file_download_data *file)
 void init_hook_files(void);
 
 bool graphics_uses_d3d11 = false;
+bool graphics_uses_winrt = false;
 bool wgc_supported = false;
 
 bool obs_module_load(void)
@@ -131,10 +132,13 @@ bool obs_module_load(void)
 	win8_or_above = ver.major > 6 || (ver.major == 6 && ver.minor >= 2);
 
 	obs_enter_graphics();
-	graphics_uses_d3d11 = gs_get_device_type() == GS_DEVICE_DIRECT3D_11;
+	const int device_type = gs_get_device_type();
 	obs_leave_graphics();
+	graphics_uses_d3d11 = device_type == GS_DEVICE_DIRECT3D_11;
+	/* libobs-winrt captures through its own D3D11 device on the renderer's adapter on Vulkan */
+	graphics_uses_winrt = graphics_uses_d3d11 || device_type == GS_DEVICE_VULKAN;
 
-	if (graphics_uses_d3d11)
+	if (graphics_uses_winrt)
 		wgc_supported = win_version_compare(&ver, &win1903) >= 0;
 
 	if (win8_or_above && graphics_uses_d3d11)
