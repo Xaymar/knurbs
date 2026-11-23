@@ -126,19 +126,19 @@ add_executable(test_no_video test_no_video.c)
 target_include_directories(test_no_video PRIVATE ${CMOCKA_INCLUDE_DIR})
 target_link_libraries(test_no_video PRIVATE OBS::libobs cmocka::cmocka)
 
-add_test(test_no_video test_no_video)
+add_test(NAME test_no_video COMMAND test_no_video)
 
 add_executable(test_type_alias test_type_alias.c)
 target_include_directories(test_type_alias PRIVATE ${CMOCKA_INCLUDE_DIR})
 target_link_libraries(test_type_alias PRIVATE OBS::libobs cmocka::cmocka)
 
-add_test(test_type_alias test_type_alias)
+add_test(NAME test_type_alias COMMAND test_type_alias)
 
 add_executable(test_encoder_patent_notice test_encoder_patent_notice.c)
 target_include_directories(test_encoder_patent_notice PRIVATE ${CMOCKA_INCLUDE_DIR})
 target_link_libraries(test_encoder_patent_notice PRIVATE OBS::libobs cmocka::cmocka)
 
-add_test(test_encoder_patent_notice test_encoder_patent_notice)
+add_test(NAME test_encoder_patent_notice COMMAND test_encoder_patent_notice)
 
 # Settings migration of the NVENC plugin; plain libobs code, so it builds
 # without the NVENC SDK.
@@ -146,7 +146,7 @@ add_executable(test_nvenc_migrate test_nvenc_migrate.c "${CMAKE_SOURCE_DIR}/plug
 target_include_directories(test_nvenc_migrate PRIVATE ${CMOCKA_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/plugins/knurbs-nvenc")
 target_link_libraries(test_nvenc_migrate PRIVATE OBS::libobs cmocka::cmocka)
 
-add_test(test_nvenc_migrate test_nvenc_migrate)
+add_test(NAME test_nvenc_migrate COMMAND test_nvenc_migrate)
 
 # Settings migration of the QSV plugin; plain libobs code, so it builds without
 # oneVPL.
@@ -154,7 +154,7 @@ add_executable(test_qsv_migrate test_qsv_migrate.c "${CMAKE_SOURCE_DIR}/plugins/
 target_include_directories(test_qsv_migrate PRIVATE ${CMOCKA_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/plugins/knurbs-qsv")
 target_link_libraries(test_qsv_migrate PRIVATE OBS::libobs cmocka::cmocka)
 
-add_test(test_qsv_migrate test_qsv_migrate)
+add_test(NAME test_qsv_migrate COMMAND test_qsv_migrate)
 
 # PCI vendor lookup of the VA-API plugin, against a fake sysfs tree.
 if(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
@@ -162,7 +162,7 @@ if(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   target_include_directories(test_vaapi_vendor PRIVATE ${CMOCKA_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/plugins/knurbs-vaapi")
   target_link_libraries(test_vaapi_vendor PRIVATE OBS::libobs cmocka::cmocka)
 
-  add_test(test_vaapi_vendor test_vaapi_vendor)
+  add_test(NAME test_vaapi_vendor COMMAND test_vaapi_vendor)
 endif()
 
 # Vulkan backend export test
@@ -546,7 +546,8 @@ target_compile_definitions(
 add_dependencies(test_obs_module fake-module)
 
 # Every test program reports failures on stderr instead of opening a dialog (see noninteractive.c), finds
-# obs.dll and the obs-deps libraries, and no test may hang the run.
+# obs.dll and the obs-deps libraries, and no test may hang the run. The runtime PATH uses $<CONFIG>, which
+# only add_test(NAME ...) evaluates.
 get_property(_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(_target IN LISTS _test_targets)
   get_target_property(_type ${_target} TYPE)
