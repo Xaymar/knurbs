@@ -42,7 +42,7 @@ void core_impl::stop_threads() noexcept
 {
 	// Threads added later stop here, before the destruction queue, so their last deletes still reach it.
 
-	// Types owned by plugins are released while the queue still accepts deferred deletes. Task 13 unloads modules
+	// Types owned by plugins are released while the queue still accepts deferred deletes. module unloading must come
 	// after this.
 	registry_.clear();
 

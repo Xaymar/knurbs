@@ -20,9 +20,11 @@ class core_impl;
 // no process-wide state, so several cores can exist side by side without interfering. Thread-safe.
 //
 // Shutdown, run by shutdown() or by the core's last release, stops the core's threads in a fixed order, the
-// destruction queue last. Between the two it clears the registry (drops every type and alias), so type objects that
-// plugins own are released while the core is still up and before any module is unloaded. After it begins, check_alive() throws error::core_gone and the destruction queue refuses
-// new tasks. What it guarantees about deferred deletes (thread::deferred_object on the destruction queue):
+// destruction queue last. Between the two it clears the registry: the registry drops its own references to every type
+// and alias. A type is destroyed then only if nobody else holds it; references handed out by registry::find and
+// list keep it alive until they are released, as they do after registry::remove_module. After shutdown begins,
+// check_alive() throws error::core_gone and the destruction queue refuses new tasks. What it guarantees about
+// deferred deletes (thread::deferred_object on the destruction queue):
 // - Every delete posted to the destruction queue before shutdown began has finished when shutdown returns. This
 //   also holds when shutdown runs on the destruction queue's own thread (for example because a deferred delete
 //   drops the last core reference): the queued deletes then run inline, before the core goes away.

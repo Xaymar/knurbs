@@ -38,7 +38,9 @@ void registry_impl::add(ref<type> t, std::string_view owner_module)
 	if (!t) {
 		throw error::invalid_argument("registry: type is empty");
 	}
+	// Plugin virtuals run here, before the lock is taken, and are never called again.
 	const std::string id(t->id());
+	const type_kind kind = t->kind();
 	if (!naming::is_valid_type_id(id)) {
 		throw error::invalid_argument("registry: invalid type ID: " + id);
 	}
@@ -48,7 +50,7 @@ void registry_impl::add(ref<type> t, std::string_view owner_module)
 	if (types_.contains(id) || aliases_.contains(id)) {
 		throw error::already_exists("registry: ID already registered: " + id);
 	}
-	types_.emplace(id, type_entry{std::move(t), std::string(owner_module)});
+	types_.emplace(id, type_entry{std::move(t), kind, std::string(owner_module)});
 }
 
 void registry_impl::add_alias(std::string_view old_id, std::string_view new_id, std::string_view owner_module)
@@ -95,7 +97,7 @@ std::vector<ref<type>> registry_impl::list(type_kind kind) const
 	std::vector<ref<type>> result;
 	std::shared_lock lock(mutex_);
 	for (const auto &[id, entry] : types_) { // std::map: sorted by ID
-		if (entry.value->kind() == kind) {
+		if (entry.kind == kind) {
 			result.push_back(entry.value);
 		}
 	}
@@ -110,6 +112,7 @@ void registry_impl::remove_module(std::string_view owner_module)
 	{
 		std::unique_lock lock(mutex_);
 		core_.check_alive();
+		dropped.reserve(types_.size()); // nothing below throws, so the removal is all or nothing
 		for (auto it = types_.begin(); it != types_.end();) {
 			if (it->second.owner == owner_module) {
 				dropped.push_back(std::move(it->second.value));

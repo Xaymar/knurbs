@@ -28,7 +28,11 @@ enum class type_kind : std::uint8_t {
 
 // A registrable kind of source, filter, transition, encoder, output or service, implemented by a plugin. This is a
 // plugin interface: virtual functions are only ever appended. An implementation must be thread-safe, and its id()
-// and kind() must never change once it is registered.
+// and kind() must never change once it is registered: the registry reads both once, in add().
+//
+// A type's destructor can run during the core's shutdown, after the registry started refusing calls, so it must not
+// call the registry (that throws error::core_gone, which terminates in a destructor). A type that holds a ref<core>
+// keeps the core alive and so keeps the registry from ever being cleared by the last release; hold a weak<core>.
 class KNURBS_API type : public object {
 public:
 	// A valid type ID (naming::is_valid_type_id).
@@ -44,7 +48,7 @@ public:
 
 // The types registered with a core, and the aliases that let old IDs (such as OBS's "dshow_input") find them.
 // Owned by core (core::registry()); it cannot be created or copied. Thread-safe: one reader-writer lock covers
-// everything, and no plugin code (type destructors included) runs while it is held.
+// everything, and no plugin code (type virtuals and destructors included) runs while it is held.
 //
 // Every member throws error::core_gone once the core's shutdown has begun. Shutdown itself clears the registry
 // (see core), so type objects are released before the modules that own their code are unloaded.

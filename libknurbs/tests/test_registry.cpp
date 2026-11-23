@@ -23,6 +23,8 @@ core::options test_options()
 	return core::options{"config", "cache"};
 }
 
+std::atomic<int> reentrant_destroyed{0};
+
 class fake_type final : public type {
 	std::string id_;
 	type_kind kind_;
@@ -202,6 +204,7 @@ void test_remove_module_releases_outside_lock(void **)
 		type_kind kind() const noexcept override { return type_kind::source; }
 		~reentrant() override
 		{
+			reentrant_destroyed.fetch_add(1);
 			try {
 				(void)c->registry().find("com.example.re");
 			} catch (const knurbs::error::core_gone &) {
@@ -212,9 +215,38 @@ void test_remove_module_releases_outside_lock(void **)
 	auto c = core::create(test_options());
 	c->registry().add(knurbs::make<reentrant>(c.get()), "m");
 	c->registry().remove_module("m");
+	assert_int_equal(reentrant_destroyed.load(), 1);
 	assert_false(static_cast<bool>(c->registry().find("com.example.re")));
 	c->registry().add(knurbs::make<reentrant>(c.get()), "m");
 	c->shutdown(); // clear() has the same rule
+}
+
+void test_virtuals_not_called_under_lock(void **)
+{
+	// id() and kind() call back into the registry. If the registry called them under its lock, find() would take
+	// the shared lock again (or the writer lock would be held), which deadlocks or throws.
+	struct calling_back final : type {
+		const core *c;
+		explicit calling_back(const core *core_ptr) : c(core_ptr) {}
+		std::string_view id() const noexcept override
+		{
+			(void)c->registry().find("com.example.x");
+			return "com.example.cb";
+		}
+		type_kind kind() const noexcept override
+		{
+			(void)c->registry().find("com.example.x");
+			(void)c->registry().list(type_kind::filter);
+			return type_kind::filter;
+		}
+	};
+	auto c = core::create(test_options());
+	auto &r = c->registry();
+	r.add(knurbs::make<calling_back>(c.get()), "m");
+	assert_int_equal(r.list(type_kind::filter).size(), 1);
+	assert_int_equal(r.list(type_kind::source).size(), 0);
+	assert_true(static_cast<bool>(r.find("com.example.cb")));
+	r.remove_module("m");
 }
 
 void test_registry_after_shutdown(void **)
@@ -327,6 +359,7 @@ int main()
 		cmocka_unit_test(test_alias_argument_checks),
 		cmocka_unit_test(test_remove_module),
 		cmocka_unit_test(test_remove_module_releases_outside_lock),
+		cmocka_unit_test(test_virtuals_not_called_under_lock),
 		cmocka_unit_test(test_registry_after_shutdown),
 		cmocka_unit_test(test_shutdown_releases_types),
 		cmocka_unit_test(test_last_release_releases_types),

@@ -1,9 +1,9 @@
 #pragma once
 
 #include <map>
-#include <string_view>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "knurbs/core.hpp"
@@ -14,6 +14,7 @@ namespace knurbs::detail {
 class registry_impl final : public registry {
 	struct type_entry {
 		ref<type> value;
+		type_kind kind; // read once in add(): no plugin virtual runs under the lock
 		std::string owner;
 	};
 	struct alias_entry {
