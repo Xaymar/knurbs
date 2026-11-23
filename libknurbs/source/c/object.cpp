@@ -1,5 +1,7 @@
 #include "knurbs/c/object.h"
 
+#include <cstdlib>
+
 #include "c-guard.hpp"
 #include "knurbs/c/result.h"
 #include "knurbs/error.hpp"
@@ -44,6 +46,11 @@ void knurbs_release(knurbs_object_t *object)
 	if (object) {
 		detail::c_from_handle(object)->release();
 	}
+}
+
+void knurbs_free(void *memory)
+{
+	std::free(memory);
 }
 
 knurbs_weak_t *knurbs_weak_get(knurbs_object_t *object)

@@ -3,6 +3,8 @@
 #include "knurbs/c/export.h"
 #include "knurbs/c/result.h"
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,6 +26,11 @@ KNURBS_C_API knurbs_weak_t *knurbs_weak_get(knurbs_object_t *object);
 KNURBS_C_API knurbs_object_t *knurbs_weak_lock(knurbs_weak_t *weak);
 /* Frees a weak reference. NULL is ignored. */
 KNURBS_C_API void knurbs_weak_release(knurbs_weak_t *weak);
+
+/* Frees memory the C API allocated and handed to the caller: strings (knurbs_data_get_string, ...) and arrays
+ * (knurbs_data_keys, ...). Every function that returns such memory says so. NULL is ignored. Never pass it memory
+ * from anywhere else, and never release handles with it (use knurbs_release). */
+KNURBS_C_API void knurbs_free(void *memory);
 
 #ifdef __cplusplus
 }
