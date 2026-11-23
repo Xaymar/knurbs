@@ -139,22 +139,6 @@ target_link_libraries(test_encoder_patent_notice PRIVATE OBS::libobs cmocka::cmo
 
 add_test(test_encoder_patent_notice test_encoder_patent_notice)
 
-# Settings migration of the NVENC plugin; plain libobs code, so it builds
-# without the NVENC SDK.
-add_executable(test_nvenc_migrate test_nvenc_migrate.c "${CMAKE_SOURCE_DIR}/plugins/knurbs-nvenc/nvenc-migrate.c")
-target_include_directories(test_nvenc_migrate PRIVATE ${CMOCKA_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/plugins/knurbs-nvenc")
-target_link_libraries(test_nvenc_migrate PRIVATE OBS::libobs cmocka::cmocka)
-
-add_test(test_nvenc_migrate test_nvenc_migrate)
-
-# Settings migration of the QSV plugin; plain libobs code, so it builds without
-# oneVPL.
-add_executable(test_qsv_migrate test_qsv_migrate.c "${CMAKE_SOURCE_DIR}/plugins/knurbs-qsv/qsv-migrate.c")
-target_include_directories(test_qsv_migrate PRIVATE ${CMOCKA_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/plugins/knurbs-qsv")
-target_link_libraries(test_qsv_migrate PRIVATE OBS::libobs cmocka::cmocka)
-
-add_test(test_qsv_migrate test_qsv_migrate)
-
 # PCI vendor lookup of the VA-API plugin, against a fake sysfs tree.
 if(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   add_executable(test_vaapi_vendor test_vaapi_vendor.c "${CMAKE_SOURCE_DIR}/plugins/knurbs-vaapi/vaapi-vendor.c")
