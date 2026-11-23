@@ -427,14 +427,15 @@ Each layer has its own tests and is usable before the next one starts.
   its own device. The in-process mode is a convenience, not a separate
   model.
 - **datapath is ready** (https://github.com/Xaymar/datapath, Xaymar,
-  2026-11-23). One message carries up to 64 KiB, and a round trip stays under
-  0.5 ms even with the system fully loaded. Shared memory, which brings the
-  idle 99.9th percentile under 1 µs, is still being worked on. That shapes the
-  interfaces:
+  2026-11-23). One message carries up to 64 KiB. A round trip averages about
+  80 µs, and stays under 0.5 ms even in the worst case of 100% CPU load on all
+  cores and threads. Shared memory, which brings the idle 99.9th percentile
+  under 1 µs, is still being worked on. That shapes the interfaces:
   - **Coarse-grained calls.** Interfaces are built around a few calls per
     frame or per settings change (one `render` with all inputs, one `update`
-    with the whole `data`), not chatty getters, so that a 0.5 ms round trip
-    per call stays affordable.
+    with the whole `data`), not chatty getters. At about 80 µs per round
+    trip, a handful of calls per frame is cheap, but a getter per property
+    per frame would not be.
   - **Bulk data never goes through messages.** Frames, textures and audio
     buffers cross as exported handles (GPU memory, shared memory) and only
     their descriptors travel in the message. Anything else that could exceed
