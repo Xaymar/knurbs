@@ -467,12 +467,6 @@ if(ENABLE_VULKAN)
       # the fix).
       _gpu_encode_test(amf_h264_fresh_images *amd-vulkan64* obs-ffmpeg h264_texture_amf nv12 rate_control=CQP cqp=20)
       set_property(TEST test_vulkan_gpu_encode_amf_h264_fresh_images APPEND PROPERTY ENVIRONMENT "OBS_AMF_VULKAN_TEST_HOLD=76")
-      # AMF's Vulkan texture path is opt-in (texture-amf.cpp amf_init_texture).
-      set_property(
-        TEST test_vulkan_gpu_encode_amf_h264 test_vulkan_gpu_encode_amf_hevc_p010 test_vulkan_gpu_encode_amf_h264_repeat
-             test_vulkan_gpu_encode_amf_h264_fresh_images
-        APPEND PROPERTY ENVIRONMENT "OBS_AMF_VULKAN_TEXTURE=1"
-      )
     endif()
     set_tests_properties(
       ${_gpu_encode_tests}

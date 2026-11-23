@@ -146,7 +146,7 @@ when `encode_texture2` returns, as before. Exported memory is always a dedicated
 | Encoder | Path | Copies per frame | Sync |
 |---|---|---|---|
 | knurbs-nvenc | `buf` imported into CUDA, registered as `CUDADEVICEPTR` | 1 (libobs: image to buffer) | CUDA waits `ready` on its stream (and the encode thread waits for the stream); CUDA signals `release` once the frame's bitstream is locked |
-| AMF (obs-ffmpeg, **opt-in**: `OBS_AMF_VULKAN_TEXTURE=1`) | `tex` imported as a VkImage into the encoder's own VkDevice, wrapped with `CreateSurfaceFromVulkanNative` | 0 in OBS (1 with a raw output active, as on D3D11); AMF's own conversion as on D3D11 | host waits on `ready` (`vkWaitSemaphores`); host signals `release` from `OnSurfaceDataRelease` |
+| AMF (obs-ffmpeg; `OBS_AMF_VULKAN_TEXTURE=0` forces the non-texture encoder) | `tex` imported as a VkImage into the encoder's own VkDevice and wrapped **once per image** with `CreateSurfaceFromVulkanNative`; that `AMFSurface` is resubmitted for the image's lifetime (a repeated frame still held by AMF gets a second one) | 0 in OBS (1 with a raw output active, as on D3D11); AMF's own conversion as on D3D11 | host waits on `ready` (`vkWaitSemaphores`); host signals `release` once AMF holds no reference to the frame's surface any more (polled on each encode call: `OnSurfaceDataRelease` does not fire while the encoder keeps its own reference) |
 
 NVENC uses the buffer because on Windows an NV12 image imported as a CUDA array reads back garbage (spike 3). Its
 CUDA device is the one whose UUID matches the renderer's adapter; on another GPU it reroutes to the non-texture
@@ -217,16 +217,17 @@ the rebuild); `test_vulkan_loss` uses it.
   (the validation layer agrees), and another process imports the same handle fine. Timelines import in-process
   without trouble. This doesn't affect the process-per-plugin model. In-process consumers on NVIDIA use CUDA or the
   device's own texture. The test asserts the failure, so a fixed driver shows up as a test failure.
-* **AMD: AMF's Vulkan encoder now and then encodes the wrong picture** (Adrenalin 26.11.2, AMF runtime 1.5,
-  Radeon 780M). Given libobs's images by `CreateSurfaceFromVulkanNative`, it encodes the picture of an earlier input
-  (5 to 30 frames back) instead of the one it was given: about one run in two shows 1 or 2 such frames in 120, more
-  after a stalled render. Ruled out: libobs reusing an image too early (it happens with every image fresh and never
-  reused), wrapper address reuse, AMF's binary versus timeline semaphore mode, the plane view formats (AMF creates
-  `R8_UINT`/`R8G8_UINT` views outside the image's format list; adding them changed nothing). The same scenes through
-  AMF's D3D11 path on the same GPU are clean, as is NVENC through the frame buffer. `AMFSurface::Duplicate` of such a
-  surface crashes, and AMF's device then reports command buffers freed and fences reset while in use. The Vulkan
-  path is therefore opt-in (`OBS_AMF_VULKAN_TEXTURE=1`); by default AMF on Vulkan reroutes to its non-texture
-  encoder. The AMF tests are registered but disabled.
+* **AMD: AMF's Vulkan encoder encodes the wrong picture when each frame gets a new `AMFSurface`** (Adrenalin
+  26.11.2, AMF runtime 1.5, Radeon 780M). For each new surface AMF exports the image's memory, opens it in PAL and
+  caches that import, and now and then it reuses the cached import of an older surface instead: the encoder gets the
+  picture of an earlier input (2 to 100+ frames back), complete and valid. Synchronisation, rate-control frame
+  skipping (off in all of this), the plane view formats, AMF's semaphore mode and image reuse make no difference;
+  `repro/amf-vulkan-stale-frame` shows it without OBS. The encoder therefore wraps each libobs image once and
+  resubmits that surface for as long as the image lives (`texture-amf-vulkan.hpp`), so AMF imports each image once
+  and nothing in its cache is recycled. The path is on by default; `OBS_AMF_VULKAN_TEXTURE=0` forces the non-texture
+  encoder. AMF also creates `R8_UINT`/`R8G8_UINT` (`R16`/`R16G16` for P010) views of both planes, so those are in
+  the format list of libobs's exportable NV12/P010 images and of the encoder's import. `AMFSurface::Duplicate` of
+  such a surface crashes, and AMF's device then reports command buffers freed and fences reset while in use.
 * **Keyed mutex timeouts in `vkQueueSubmit2` differ.** NVIDIA returns `VK_TIMEOUT` (a success code: the batch runs
   and signals). AMD returns `VK_SUCCESS` even though the acquire couldn't succeed. Hence the CPU-side timeout above.
 
@@ -248,6 +249,8 @@ with libavcodec. Every decoded frame must be whole (both numbers agree), current
 and in order, the encoder must not have rerouted to its raw variant, and neither libobs's device nor the encoder's
 own Vulkan device may report a validation message. `stall=N` makes every N-th render sleep for three frame times
 (libobs then repeats frames), `overdraw=N` adds GPU load. NVENC runs H.264 NV12, HEVC P010, H.264 with lookahead
-(the pool grows) and H.264 with stalls on the NVIDIA adapter; the AMF tests (H.264, HEVC P010, stalls) are disabled
-(see Driver issues). A missing ready wait could not be caught at a size the validation layer runs in reasonable
+(the pool grows) and H.264 with stalls on the NVIDIA adapter. AMF runs H.264 NV12, HEVC P010, H.264 with stalls and
+H.264 over many images (`OBS_AMF_VULKAN_TEST_HOLD=76` keeps frames held, so the pool grows to its limit and most
+frames come in images AMF has not seen) on the AMD adapter; with `OBS_AMF_VULKAN_TEST_WRAP_EACH_FRAME=1` (a new
+surface per frame, as before the fix) they show AMF's stale frames (see Driver issues). A missing ready wait could not be caught at a size the validation layer runs in reasonable
 time: the GPU finishes a 640x352 frame before the encoder thread reads it.

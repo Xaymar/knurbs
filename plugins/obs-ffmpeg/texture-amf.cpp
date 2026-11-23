@@ -456,12 +456,11 @@ static bool amf_init_texture(amf_texencode *enc)
 		return amf_init_d3d11(enc);
 	}
 #ifdef ENABLE_AMF_VULKAN
-	/* Opt-in until AMF encodes every frame it is given: under bursts of input (after a stalled render) AMF's
-	 * Vulkan path encodes the picture of another, earlier input now and then, even when no image is ever reused
-	 * (docs/graphics-interop.md, "Driver issues"). Without it the non-texture encoder takes over. */
-	const char *opt_in = getenv("OBS_AMF_VULKAN_TEXTURE");
-	if (!opt_in || strcmp(opt_in, "1") != 0) {
-		info("%s: texture encoding on Vulkan is off (OBS_AMF_VULKAN_TEXTURE=1 enables it)", __FUNCTION__);
+	/* OBS_AMF_VULKAN_TEXTURE=0 forces the non-texture encoder (texture-amf-vulkan.hpp: AMF's stale-frame bug
+	 * and how this path avoids it). */
+	const char *opt = getenv("OBS_AMF_VULKAN_TEXTURE");
+	if (opt && strcmp(opt, "0") == 0) {
+		info("%s: texture encoding on Vulkan is off (OBS_AMF_VULKAN_TEXTURE=0)", __FUNCTION__);
 		return false;
 	}
 	enc->vulkan = true;
