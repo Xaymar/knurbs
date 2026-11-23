@@ -429,12 +429,15 @@ amf::AMFVulkanSurface *amf_vulkan::surface(const encoder_texture_shared &shared)
 		}
 		// Exactly as libobs-vulkan creates its NV12/P010 encoder frames (vk_texture_image_info): an opaque
 		// import needs the exporter's parameters.
-		const VkFormat views[2] = {p010 ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM,
-					   p010 ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R8G8_UNORM};
+		// The UINT views are the ones AMF creates.
+		const VkFormat views[4] = {p010 ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM,
+					   p010 ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R8G8_UNORM,
+					   p010 ? VK_FORMAT_R16_UINT : VK_FORMAT_R8_UINT,
+					   p010 ? VK_FORMAT_R16G16_UINT : VK_FORMAT_R8G8_UINT};
 		VkExternalMemoryImageCreateInfo emi = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
 		emi.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
 		VkImageFormatListCreateInfo fl = {VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO, &emi};
-		fl.viewFormatCount = 2;
+		fl.viewFormatCount = 4;
 		fl.pViewFormats = views;
 		VkImageCreateInfo ii = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &fl};
 		ii.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;

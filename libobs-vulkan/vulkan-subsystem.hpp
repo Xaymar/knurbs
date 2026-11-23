@@ -285,7 +285,7 @@ struct gs_timer_range {
 struct vk_image_desc {
 	VkImageCreateInfo ii;
 	VkImageFormatListCreateInfo fl; // chained by the caller when use_list
-	VkFormat views[2];
+	VkFormat views[4];
 	bool use_list;
 };
 bool vk_texture_image_info(gs_device *d, uint32_t width, uint32_t height, enum gs_color_format format,

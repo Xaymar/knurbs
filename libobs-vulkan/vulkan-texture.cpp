@@ -548,9 +548,14 @@ bool vk_texture_image_info(gs_device *d, uint32_t width, uint32_t height, enum g
 		if (!width || !height || (width & 1) || (height & 1) || !planar_supported(d, f, width, height)) {
 			return false;
 		}
+		// The UINT views are AMF's: its Vulkan encoder views both planes of the images it is given as R8_UINT /
+		// R8G8_UINT (R16 for P010), and an importer has to create the image as it was exported.
+		const bool p010 = layout == GS_SHARED_P010;
 		out.views[0] = f.y;
 		out.views[1] = f.uv;
-		out.fl.viewFormatCount = 2;
+		out.views[2] = p010 ? VK_FORMAT_R16_UINT : VK_FORMAT_R8_UINT;
+		out.views[3] = p010 ? VK_FORMAT_R16G16_UINT : VK_FORMAT_R8G8_UINT;
+		out.fl.viewFormatCount = 4;
 		out.use_list = true;
 		ii.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
 		ii.format = f.image;
