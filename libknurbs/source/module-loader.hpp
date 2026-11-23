@@ -15,7 +15,26 @@ namespace knurbs::detail {
 
 class core_impl;
 
-using module_entry = void (*)(module *);
+class module_impl;
+
+// One of a module's entry points (load, post_load or unload), of the API kind the module is written against; empty
+// if the module does not export it.
+class entry_point {
+	using cpp_entry = void (*)(module *);
+	using c_entry = void (*)(knurbs_module_t *);
+
+	cpp_entry cpp_ = nullptr;
+	c_entry c_ = nullptr;
+
+public:
+	entry_point() noexcept = default;
+	explicit entry_point(cpp_entry e) noexcept : cpp_(e) {}
+	explicit entry_point(c_entry e) noexcept : c_(e) {}
+
+	explicit operator bool() const noexcept { return cpp_ || c_; }
+	// Calls it with `m`, or its C handle for a C module.
+	void operator()(module_impl &m) const;
+};
 
 class module_impl final : public module {
 public:
@@ -32,8 +51,8 @@ public:
 	// The library handle is never closed (see module): types handed out by the registry can outlive the core,
 	// and the module's code may still be on a stack.
 	void *library_ = nullptr;
-	module_entry post_load_ = nullptr;
-	module_entry unload_ = nullptr;
+	entry_point post_load_;
+	entry_point unload_;
 
 	// Guarded by module_manager_impl::mutex_.
 	bool unloaded_ = false;

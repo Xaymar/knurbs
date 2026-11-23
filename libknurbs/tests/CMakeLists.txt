@@ -72,9 +72,13 @@ target_compile_definitions(test_locale PRIVATE KNURBS_TEST_DATA_DIR="${CMAKE_CUR
 # modules/<name>/data/. The loader expects CMake's MODULE prefix and suffix (see libknurbs/CMakeLists.txt).
 set(_knurbs_test_modules_dir "${CMAKE_CURRENT_BINARY_DIR}/modules")
 
-# knurbs_add_fake_module(<name> <source>): tests/modules/<source>, linked with libknurbs
+# knurbs_add_fake_module(<name> <source>): tests/modules/<source> (C++, or C11 for a .c file), linked with libknurbs
 function(knurbs_add_fake_module name source)
   add_library(${name} MODULE modules/${source})
+  # The C headers must stay clean C11
+  if(source MATCHES "\\.c$" AND NOT MSVC)
+    target_compile_options(${name} PRIVATE -Wall -Wextra -pedantic)
+  endif()
   # Keep char8_t on when OBS turns it off (see libknurbs/CMakeLists.txt)
   target_compile_options(${name} PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fchar8_t>)
   target_link_libraries(${name} PRIVATE knurbs::knurbs)
@@ -83,6 +87,10 @@ function(knurbs_add_fake_module name source)
     ${name}
     PROPERTIES
       FOLDER "Tests and Examples"
+      C_STANDARD 11
+      C_STANDARD_REQUIRED ON
+      C_EXTENSIONS OFF
+      C_VISIBILITY_PRESET hidden
       CXX_VISIBILITY_PRESET hidden
       VISIBILITY_INLINES_HIDDEN ON
       LIBRARY_OUTPUT_DIRECTORY "$<1:${_knurbs_test_modules_dir}/${name}/bin>"
@@ -93,6 +101,7 @@ function(knurbs_add_fake_module name source)
   set_property(GLOBAL APPEND PROPERTY _knurbs_fake_modules ${name})
 endfunction()
 
+knurbs_add_fake_module(fake-c fake-c.c)
 knurbs_add_fake_module(fake-ok fake-ok.cpp)
 knurbs_add_fake_module(fake-throws fake-throws.cpp)
 knurbs_add_fake_module(fake-other-major fake-other-major.cpp)
@@ -107,3 +116,8 @@ knurbs_add_test(test_c_object C)
 
 # C11 with -pedantic: includes the C headers for data and properties
 knurbs_add_test(test_c_data C)
+
+# C11 with -pedantic: includes the C headers for the registry and modules, and loads the fake modules
+knurbs_add_test(test_c_registry C)
+add_dependencies(test_c_registry ${_knurbs_fake_modules})
+target_compile_definitions(test_c_registry PRIVATE KNURBS_TEST_MODULES_DIR="${_knurbs_test_modules_dir}")

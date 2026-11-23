@@ -13,6 +13,7 @@
 #include <thread>
 #include <utility>
 
+#include "c/c-guard.hpp"
 #include "core-impl.hpp"
 #include "knurbs/error.hpp"
 #include "knurbs/platform.hpp"
@@ -86,7 +87,27 @@ template<class F> F find_symbol(void *library, const char *name) noexcept
 #endif
 }
 
+// The entry point `name` of a module of API kind `api_kind` (KNURBS_MODULE_API_C or KNURBS_MODULE_API_CPP).
+entry_point find_entry(void *library, std::uint32_t api_kind, const char *name) noexcept
+{
+	if (api_kind == KNURBS_MODULE_API_C) {
+		auto e = find_symbol<void (*)(knurbs_module_t *)>(library, name);
+		return e ? entry_point(e) : entry_point();
+	}
+	auto e = find_symbol<void (*)(module *)>(library, name);
+	return e ? entry_point(e) : entry_point();
+}
+
 } // namespace
+
+void entry_point::operator()(module_impl &m) const
+{
+	if (c_) {
+		c_(c_to_typed_handle<knurbs_module_t>(&m));
+	} else {
+		cpp_(&m);
+	}
+}
 
 current_module_scope::current_module_scope(const module_impl &m) noexcept : previous_(current_module)
 {
@@ -207,24 +228,23 @@ void module_manager_impl::open_and_load(module_impl &m)
 	if (!header || header->size < sizeof(struct knurbs_module_header)) {
 		throw error::plugin_failed("invalid module header");
 	}
-	if (header->api_kind == KNURBS_MODULE_API_C) {
-		throw error::unsupported("C modules are not supported yet");
+	const std::uint32_t api_kind = header->api_kind;
+	if (api_kind != KNURBS_MODULE_API_C && api_kind != KNURBS_MODULE_API_CPP) {
+		throw error::plugin_failed(std::format("unknown API kind {}", api_kind));
 	}
-	if (header->api_kind != KNURBS_MODULE_API_CPP) {
-		throw error::plugin_failed(std::format("unknown API kind {}", header->api_kind));
-	}
+	// The same check for C and C++ modules.
 	if (header->api_major != static_cast<std::uint32_t>(version::major)) {
 		throw error::version_mismatch(std::format("built for API major version {}, but this is version {}",
 							  header->api_major, version::major));
 	}
 
-	auto load = find_symbol<module_entry>(m.library_, "knurbs_module_load");
+	const entry_point load = find_entry(m.library_, api_kind, "knurbs_module_load");
 	if (!load) {
 		throw error::plugin_failed("the library has no knurbs_module_load");
 	}
-	m.post_load_ = find_symbol<module_entry>(m.library_, "knurbs_module_post_load");
-	m.unload_ = find_symbol<module_entry>(m.library_, "knurbs_module_unload");
-	load(&m);
+	m.post_load_ = find_entry(m.library_, api_kind, "knurbs_module_post_load");
+	m.unload_ = find_entry(m.library_, api_kind, "knurbs_module_unload");
+	load(m);
 }
 
 std::vector<ref<module>> module_manager_impl::load(const std::vector<found> &modules)
@@ -263,7 +283,7 @@ std::vector<ref<module>> module_manager_impl::load(const std::vector<found> &mod
 			to_post_load.push_back(m);
 		}
 	}
-	run_each(to_post_load, [](module_impl &m) { m.post_load_(&m); }, true);
+	run_each(to_post_load, [](module_impl &m) { m.post_load_(m); }, true);
 
 	return {batch.begin(), batch.end()};
 }
@@ -292,7 +312,7 @@ void module_manager_impl::unload_all() noexcept
 		}
 		try {
 			// One at a time, each on its own thread like the other entry points.
-			run_each({m}, [](module_impl &mod) { mod.unload_(&mod); }, false);
+			run_each({m}, [](module_impl &mod) { mod.unload_(mod); }, false);
 		} catch (...) {
 			// Out of memory starting it: the module is not told.
 		}

@@ -25,6 +25,9 @@ class module_manager_impl;
 
 // A loaded (or failed) module: a shared library with the entry points below, found by module_manager::discover.
 //
+// A module written in C uses KNURBS_MODULE_C() and the entry points described in knurbs/c/module.h, which get the
+// module's C handle and are run exactly like those of a C++ module.
+//
 // A C++ module uses KNURBS_MODULE_CPP() once and defines its entry points as
 //     extern "C" KNURBS_MODULE_EXPORT void knurbs_module_load(knurbs::module *m);       // required
 //     extern "C" KNURBS_MODULE_EXPORT void knurbs_module_post_load(knurbs::module *m);  // optional
@@ -96,7 +99,7 @@ public:
 	// Loads the libraries and calls knurbs_module_load of every module in parallel, waits for all of them, then
 	// calls knurbs_module_post_load of every module that has not failed, in parallel. Returns every module, failed
 	// ones included, in the order of `modules`. A module is failed when its library cannot be loaded, its header
-	// is missing or invalid, it is a C++ module of another API major version, it has no knurbs_module_load, its
+	// is missing or invalid, it was built for another API major version, it has no knurbs_module_load, its
 	// name is already loaded into this core, or load or post_load threw; see module. Throws error::core_gone once
 	// shutdown has begun.
 	std::vector<ref<module>> load(const std::vector<found> &modules);
