@@ -22,6 +22,8 @@ add_library(knurbs::knurbs ALIAS libknurbs)
 target_sources(
   libknurbs
   PRIVATE
+    source/core-impl.hpp
+    source/core.cpp
     source/error.cpp
     source/log.cpp
     source/naming.cpp

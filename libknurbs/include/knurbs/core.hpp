@@ -1,0 +1,58 @@
+#pragma once
+
+#include <filesystem>
+
+#include "knurbs/export.hpp"
+#include "knurbs/log.hpp"
+#include "knurbs/object.hpp"
+#include "knurbs/ref.hpp"
+#include "knurbs/thread.hpp"
+
+namespace knurbs {
+
+namespace detail {
+class core_impl;
+}
+
+// The root of a libknurbs instance: it owns the logger, the threads and everything created through it. There is
+// no process-wide state, so several cores can exist side by side without interfering. Thread-safe.
+//
+// Shutdown, run by shutdown() or by the core's last release, stops the core's threads in a fixed order, the
+// destruction queue last. After it begins, check_alive() throws error::core_gone and the destruction queue refuses
+// new tasks. What it guarantees about deferred deletes (thread::deferred_object on the destruction queue):
+// - Every delete posted to the destruction queue before shutdown began has finished when shutdown returns. This
+//   also holds when shutdown runs on the destruction queue's own thread (for example because a deferred delete
+//   drops the last core reference): the queued deletes then run inline, before the core goes away.
+// - An object released after shutdown began is deleted inline, on the releasing thread, inside that release. Such
+//   deletes can overlap the queued deletes that shutdown is still draining; there is no ordering between the two.
+// - Called while another thread's shutdown is in progress, shutdown() waits for it to finish. The exception is a
+//   call from a task on the destruction queue itself, which returns at once, because the shutdown in progress is
+//   waiting for that very task.
+class KNURBS_API core : public object {
+	// Only created by create(); not meant to be subclassed.
+	core() noexcept = default;
+	friend class detail::core_impl;
+
+public:
+	struct options {
+		std::filesystem::path config_path;
+		std::filesystem::path cache_path;
+	};
+
+	// Starts a core and logs "knurbs <major>.<minor>.<patch> core started" at level::info to its logger. Throws
+	// error::invalid_argument when config_path or cache_path is empty.
+	static ref<core> create(options opts);
+
+	ref<log::logger> logger() const;
+	// The queue that deferred objects of this core are deleted on. It is stopped by shutdown.
+	ref<thread::task_queue> destruction_queue() const;
+
+	// Stops the core; see above. Idempotent. The core's last release calls it.
+	void shutdown() noexcept;
+	// True once shutdown has begun.
+	bool is_shut_down() const noexcept;
+	// Throws error::core_gone once shutdown has begun.
+	void check_alive() const;
+};
+
+} // namespace knurbs
