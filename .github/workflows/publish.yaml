@@ -265,7 +265,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [arm64, x86_64]
+        target: [universal]
     defaults:
       run:
         shell: zsh --no-rcs --errexit --pipefail {0}
@@ -289,7 +289,7 @@ jobs:
             channel='beta'
           }
 
-          local -A arch_names=(x86_64 intel arm64 apple)
+          local -A arch_names=(x86_64 intel arm64 apple universal universal)
           print "cpuName=${arch_names[${{ matrix.target }}]}" >> $GITHUB_OUTPUT
           print "commitHash=${GITHUB_SHA:0:9}" >> $GITHUB_OUTPUT
           print "channel=${channel}" >> $GITHUB_OUTPUT

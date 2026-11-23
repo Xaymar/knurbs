@@ -48,6 +48,7 @@ package() {
 
   local target
   local -r -a _valid_targets=(
+    macos-universal
     macos-x86_64
     macos-arm64
     ubuntu-x86_64
@@ -129,7 +130,7 @@ package() {
       return 0
     }
 
-    local -A arch_names=(x86_64 Intel arm64 Apple)
+    local -A arch_names=(x86_64 Intel arm64 Apple universal Universal)
     output_name="${output_name}-macos-${(L)arch_names[${target##*-}]}"
 
     local volume_name

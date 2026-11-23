@@ -64,7 +64,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [arm64, x86_64]
+        target: [universal]
     defaults:
       run:
         shell: zsh --no-rcs --errexit --pipefail {0}
@@ -94,7 +94,7 @@ jobs:
           if (( #remove_formulas )) brew uninstall --ignore-dependencies ${remove_formulas}
           print '::endgroup::'
 
-          local -A arch_names=(x86_64 intel arm64 apple)
+          local -A arch_names=(x86_64 intel arm64 apple universal universal)
           print "cpuName=${arch_names[${{ matrix.target }}]}" >> $GITHUB_OUTPUT
 
           local xcode_cas_path="${HOME}/Library/Developer/Xcode/DerivedData/CompilationCache.noindex"
@@ -384,7 +384,7 @@ jobs:
     name: Windows 🪟
     strategy:
       matrix:
-        architecture: [x64, arm64]
+        architecture: [x64]
     runs-on: windows-2025-vs2026
     needs: check-event
     defaults:

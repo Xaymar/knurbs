@@ -1,2 +1,109 @@
-Language: C
-BasedOnStyle: InheritParentConfig
+# Knurbs code style, derived from StreamFX (github.com/Xaymar/obs-StreamFX).
+# Applies to new Knurbs code only. Upstream OBS directories keep the root
+# .clang-format so that merging upstream fixes does not conflict.
+# Requires clang-format 22 or later.
+
+# Basic Formatting
+TabWidth: 4
+UseTab: ForContinuationAndIndentation
+ColumnLimit: 65535
+#- 0 does not respect the original line breaks!
+
+# Indentation
+AccessModifierOffset: 0
+ConstructorInitializerIndentWidth: 4
+ContinuationIndentWidth: 4
+IndentCaseLabels: false
+IndentWidth: 4
+IndentWrappedFunctionNames: true
+NamespaceIndentation: All
+
+# Includes
+IncludeCategories:
+  - Regex: '^"warning-disable.hpp"$'
+    Priority: 50
+  - Regex: '^<knurbs/'
+    Priority: 100
+  - Regex: '^<'
+    Priority: 200
+  - Regex: '^<Q'
+    Priority: 250
+  - Regex: '^"'
+    Priority: 300
+  - Regex: '.moc"$'
+    Priority: 300
+  - Regex: '^"warning-enable.hpp"$'
+    Priority: 500
+SortIncludes: CaseSensitive
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveDeclarations: Consecutive
+AlignEscapedNewlines: Left
+AlignOperands: Align
+AlignTrailingComments: false
+DerivePointerAlignment: false
+PointerAlignment: Left
+
+# Wrapping and Breaking
+AllowAllParametersOfDeclarationOnNextLine: true
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakBeforeMultilineStrings: true
+BreakAfterReturnType: None
+BreakTemplateDeclarations: Yes
+BraceWrapping:
+  AfterClass: false
+  AfterControlStatement: Never
+  AfterEnum: false
+  AfterFunction: true
+  AfterNamespace: false
+  AfterStruct: false
+  AfterUnion: false
+  BeforeCatch: false
+  BeforeElse: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+BinPackArguments: true
+BinPackParameters: BinPack
+BreakBeforeBinaryOperators: NonAssignment
+BreakBeforeBraces: Custom
+BreakBeforeTernaryOperators: true
+BreakConstructorInitializers: BeforeColon
+BreakStringLiterals: true
+PackConstructorInitializers: BinPack
+Cpp11BracedListStyle: true
+
+# Spaces
+SpaceAfterCStyleCast: false
+SpaceAfterTemplateKeyword: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesBeforeTrailingComments: 1
+SpacesInAngles: Never
+SpacesInContainerLiterals: false
+SpacesInParens: Never
+SpacesInSquareBrackets: false
+
+# Other
+CommentPragmas: '^(!FIXME!|!TODO!|ToDo:)'
+CompactNamespaces: false
+DisableFormat: false
+FixNamespaceComments: true
+InsertNewlineAtEOF: true
+KeepEmptyLines:
+  AtStartOfBlock: false
+ReflowComments: Never
+SortUsingDeclarations: LexicographicNumeric
+---
+Language: Cpp
+Standard: Latest
+---
+Language: ObjC
+...

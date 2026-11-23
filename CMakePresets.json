@@ -109,10 +109,12 @@
     {
       "name": "macos-ci",
       "displayName": "macOS (CI)",
-      "description": "CI macOS build (single architecture only)",
+      "description": "CI macOS build (universal arm64 and x86_64)",
       "inherits": ["macos"],
       "warnings": {"dev": true, "deprecated": true},
       "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": {"type": "STRING", "value": "arm64;x86_64"},
+        "SPARKLE_APPCAST_URL": {"type": "STRING", "value": "https://obsproject.com/osx_update/updates_universal_v2.xml"},
         "CMAKE_XCODE_ATTRIBUTE_COMPILATION_CACHE_ENABLE_CACHING": "YES",
         "CMAKE_XCODE_ATTRIBUTE_COMPILATION_CACHE_CAS_PATH": "$penv{XCODE_CAS_PATH}"
       }

@@ -134,6 +134,12 @@ target_link_libraries(test_type_alias PRIVATE OBS::libobs cmocka::cmocka)
 
 add_test(test_type_alias test_type_alias)
 
+add_executable(test_encoder_patent_notice test_encoder_patent_notice.c)
+target_include_directories(test_encoder_patent_notice PRIVATE ${CMOCKA_INCLUDE_DIR})
+target_link_libraries(test_encoder_patent_notice PRIVATE OBS::libobs cmocka::cmocka)
+
+add_test(test_encoder_patent_notice test_encoder_patent_notice)
+
 # Settings migration of the NVENC plugin; plain libobs code, so it builds
 # without the NVENC SDK.
 add_executable(test_nvenc_migrate test_nvenc_migrate.c "${CMAKE_SOURCE_DIR}/plugins/knurbs-nvenc/nvenc-migrate.c")
@@ -141,6 +147,23 @@ target_include_directories(test_nvenc_migrate PRIVATE ${CMOCKA_INCLUDE_DIR} "${C
 target_link_libraries(test_nvenc_migrate PRIVATE OBS::libobs cmocka::cmocka)
 
 add_test(test_nvenc_migrate test_nvenc_migrate)
+
+# Settings migration of the QSV plugin; plain libobs code, so it builds without
+# oneVPL.
+add_executable(test_qsv_migrate test_qsv_migrate.c "${CMAKE_SOURCE_DIR}/plugins/knurbs-qsv/qsv-migrate.c")
+target_include_directories(test_qsv_migrate PRIVATE ${CMOCKA_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/plugins/knurbs-qsv")
+target_link_libraries(test_qsv_migrate PRIVATE OBS::libobs cmocka::cmocka)
+
+add_test(test_qsv_migrate test_qsv_migrate)
+
+# PCI vendor lookup of the VA-API plugin, against a fake sysfs tree.
+if(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
+  add_executable(test_vaapi_vendor test_vaapi_vendor.c "${CMAKE_SOURCE_DIR}/plugins/knurbs-vaapi/vaapi-vendor.c")
+  target_include_directories(test_vaapi_vendor PRIVATE ${CMOCKA_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/plugins/knurbs-vaapi")
+  target_link_libraries(test_vaapi_vendor PRIVATE OBS::libobs cmocka::cmocka)
+
+  add_test(test_vaapi_vendor test_vaapi_vendor)
+endif()
 
 # Vulkan backend export test
 if(ENABLE_VULKAN)
@@ -465,7 +488,7 @@ if(ENABLE_VULKAN)
 
   # GPU (texture) encoding through the shared frames: a real encoder module encodes a moving, numbered pattern and
   # libavcodec decodes it back. Each test picks its GPU with VK_LOADER_DRIVERS_SELECT and skips without it.
-  if(OS_WINDOWS AND (TARGET knurbs-nvenc OR TARGET obs-ffmpeg))
+  if(OS_WINDOWS AND (TARGET knurbs-nvenc OR TARGET knurbs-amf))
     find_package(FFmpeg 8.0 REQUIRED COMPONENTS avcodec avutil)
     add_executable(test_vulkan_gpu_encode test_vulkan_gpu_encode.cpp)
     target_include_directories(test_vulkan_gpu_encode PRIVATE ${CMOCKA_INCLUDE_DIR})
@@ -474,7 +497,7 @@ if(ENABLE_VULKAN)
     target_link_libraries(test_vulkan_gpu_encode PRIVATE OBS::libobs FFmpeg::avcodec FFmpeg::avutil cmocka::cmocka)
     add_dependencies(test_vulkan_gpu_encode libobs-vulkan)
     set(_gpu_encode_tests)
-    # The encoders look for their capability probes (knurbs-nvenc-test, obs-amf-test) next to the executable.
+    # The encoders look for their capability probes (knurbs-nvenc-test, knurbs-amf-test) next to the executable.
     macro(_gpu_encode_probe probe)
       if(TARGET ${probe})
         add_dependencies(test_vulkan_gpu_encode ${probe})
@@ -507,19 +530,20 @@ if(ENABLE_VULKAN)
       # A stalled render: libobs repeats frames, so one shared frame sits in several NVENC slots at once.
       _gpu_encode_test(nvenc_h264_repeat *nv-vk64* knurbs-nvenc ${_nv}.h264 nv12 rate_control=CQP cqp=20 bf=2 stall=10)
     endif()
-    if(TARGET obs-ffmpeg)
-      add_dependencies(test_vulkan_gpu_encode obs-ffmpeg)
-      _gpu_encode_probe(obs-amf-test)
-      _gpu_encode_test(amf_h264 *amd-vulkan64* obs-ffmpeg h264_texture_amf nv12 rate_control=CQP cqp=20)
-      _gpu_encode_test(amf_hevc_p010 *amd-vulkan64* obs-ffmpeg h265_texture_amf p010 rate_control=CQP cqp=20)
-      _gpu_encode_test(amf_h264_repeat *amd-vulkan64* obs-ffmpeg h264_texture_amf nv12 rate_control=CQP cqp=20 stall=10)
+    if(TARGET knurbs-amf)
+      add_dependencies(test_vulkan_gpu_encode knurbs-amf)
+      _gpu_encode_probe(knurbs-amf-test)
+      set(_amf com.xaymar.knurbs.amf)
+      _gpu_encode_test(amf_h264 *amd-vulkan64* knurbs-amf ${_amf}.h264 nv12 rate_control=CQP cqp=20)
+      _gpu_encode_test(amf_hevc_p010 *amd-vulkan64* knurbs-amf ${_amf}.hevc p010 rate_control=CQP cqp=20)
+      _gpu_encode_test(amf_h264_repeat *amd-vulkan64* knurbs-amf ${_amf}.h264 nv12 rate_control=CQP cqp=20 stall=10)
       # AMF's stale frames (docs/graphics-interop.md, Driver issues): given a new AMFSurface for an image, AMF now and
       # then encodes the picture of an earlier one, so the encoder wraps each image once. With the code from before
       # that (OBS_AMF_VULKAN_TEST_WRAP_EACH_FRAME=1) the three tests above fail every run. This one covers many
       # images: the encoder keeps 76 frames held longer (OBS_AMF_VULKAN_TEST_HOLD), so libobs's frame pool grows to
       # its limit of 80 and two thirds of the frames come in images AMF has not seen yet (4 of 5 runs fail without
       # the fix).
-      _gpu_encode_test(amf_h264_fresh_images *amd-vulkan64* obs-ffmpeg h264_texture_amf nv12 rate_control=CQP cqp=20)
+      _gpu_encode_test(amf_h264_fresh_images *amd-vulkan64* knurbs-amf ${_amf}.h264 nv12 rate_control=CQP cqp=20)
       set_property(TEST test_vulkan_gpu_encode_amf_h264_fresh_images APPEND PROPERTY ENVIRONMENT "OBS_AMF_VULKAN_TEST_HOLD=76")
     endif()
     set_tests_properties(
