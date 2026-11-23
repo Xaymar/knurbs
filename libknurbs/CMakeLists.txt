@@ -93,13 +93,17 @@ set_target_properties(
   PROPERTIES OUTPUT_NAME knurbs VERSION 0.1.0 SOVERSION 0 CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
 )
 
-install(DIRECTORY include/knurbs DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(
-  TARGETS libknurbs
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
+# Installed only by the standalone build. Nothing in the OBS build uses libknurbs yet, and its install paths would
+# put an unused library into the OBS packages (outside bin/64bit on Windows) and its headers into OBS's include/knurbs.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  install(DIRECTORY include/knurbs DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  install(
+    TARGETS libknurbs
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+endif()
 
 if(KNURBS_BUILD_TESTS)
   add_subdirectory(tests)
