@@ -102,8 +102,8 @@ public:
 	std::vector<ref<module>> load(const std::vector<found> &modules);
 
 	// Calls knurbs_module_unload of every loaded module that has not failed, in reverse name order. Each module
-	// is unloaded at most once. Does not remove the modules' types. core::shutdown() calls this before it clears
-	// the registry.
+	// is unloaded at most once. Does not remove the modules' types. Meant for shutdown: core::shutdown() calls
+	// this before it clears the registry. Called on a live core, it leaves the modules' types registered.
 	void unload_all() noexcept;
 };
 

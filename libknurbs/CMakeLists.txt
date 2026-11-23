@@ -65,7 +65,13 @@ if(KNURBS_BUILD_TESTS)
 endif()
 
 if(MSVC)
-  target_compile_options(libknurbs PUBLIC /EHsc /permissive- /Zc:__cplusplus /utf-8)
+  # /EHs without c: module entry points are extern "C" and may throw (the loader catches it, see knurbs/module.hpp),
+  # which /EHc makes undefined. /EHc- clears the c of the /EHsc in CMake's default CMAKE_CXX_FLAGS. PUBLIC, so modules
+  # built against libknurbs get it too.
+  target_compile_options(
+    libknurbs
+    PUBLIC /EHs /EHc- /permissive- /Zc:__cplusplus /utf-8
+  )
 else()
   target_compile_options(libknurbs PRIVATE -Wall -Wextra)
 endif()

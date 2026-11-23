@@ -54,8 +54,12 @@ void *open_library(const std::filesystem::path &path)
 {
 #if defined(_WIN32)
 	// The path's native form is UTF-16, so non-ASCII paths never go through the ANSI code page.
-	// An absolute path, so LoadLibraryW does not search for it.
-	HMODULE handle = LoadLibraryW(std::filesystem::absolute(path).c_str());
+	// The module's own directory is searched for its dependencies, per call and without touching the process-wide
+	// DLL directory, so parallel loads cannot race. LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR needs an absolute path with
+	// backslashes (CMake and callers may hand us forward slashes).
+	const std::filesystem::path full = std::filesystem::absolute(path).make_preferred();
+	HMODULE handle = LoadLibraryExW(full.c_str(), nullptr,
+					LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 	if (!handle) {
 		throw error::plugin_failed(std::format("cannot load the library (error {})", GetLastError()));
 	}
@@ -185,7 +189,7 @@ template<class F> void module_manager_impl::run_each(const std::vector<module_im
 				}
 			});
 		} catch (const std::system_error &e) {
-			fail(*m, std::format("cannot start a thread: {}", e.what()), false);
+			fail(*m, std::format("cannot start a thread: {}", e.what()), remove_types);
 		}
 	}
 	// The barrier: the jthreads join here.
