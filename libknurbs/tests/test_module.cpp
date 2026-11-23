@@ -231,6 +231,21 @@ static void test_reject_other_major(void **)
 	assert_true(line.find("version") != line.npos);
 }
 
+static void test_reject_c_other_major(void **)
+{
+	// fake-c built for API major version 99, in a directory of its own so the other tests do not see it.
+	auto log = std::make_shared<log_capture>();
+	auto c = make_core(log);
+	auto mods = c->modules().load(c->modules().discover({KNURBS_TEST_OTHER_MODULES_DIR}));
+
+	assert_int_equal(mods.size(), 1);
+	assert_true(mods[0]->failed());
+	assert_false(marker_exists("fake-c", "load"));
+	assert_false(static_cast<bool>(c->registry().find("com.example.fake.c")));
+	std::string line = log->line_with("module fake-c-other-major: ");
+	assert_true(line.find("version") != line.npos);
+}
+
 static void test_unload_on_shutdown(void **)
 {
 	auto c = make_core();
@@ -338,9 +353,22 @@ knurbs_module_t *c_handle(const ref<module> &m)
 	return static_cast<knurbs_module_t *>(static_cast<void *>(static_cast<knurbs::object *>(m.get())));
 }
 
+// When set, count_free calls into the registry of this core, which would deadlock if free_param ran under the
+// registry's lock.
+knurbs_core_t *reentry_core = nullptr;
+
 void count_free(void *param)
 {
 	++*static_cast<int *>(param);
+	if (reentry_core) {
+		knurbs_release(
+			reinterpret_cast<knurbs_object_t *>(knurbs_registry_find(reentry_core, "com.example.fake.ok")));
+	}
+}
+
+knurbs_core_t *c_handle(const ref<core> &c)
+{
+	return static_cast<knurbs_core_t *>(static_cast<void *>(static_cast<knurbs::object *>(c.get())));
 }
 
 int defaults_calls = 0;
@@ -386,6 +414,7 @@ static void test_c_registry_add_checks_info(void **)
 	auto mods = c->modules().load(c->modules().discover({modules_dir()}));
 	knurbs_module_t *m = c_handle(by_name(mods, "fake-ok"));
 	int freed = 0;
+	reentry_core = c_handle(c);
 
 	// Without a readable struct the library cannot take ownership, so free_param does not run.
 	assert_int_equal(knurbs_registry_add(m, nullptr), KNURBS_ERROR_INVALID_ARGUMENT);
@@ -436,9 +465,7 @@ static void test_c_registry_add_checks_info(void **)
 
 		// Through the C handle as well.
 		defaults_calls = 0;
-		knurbs_type_t *ct = knurbs_registry_find(
-			static_cast<knurbs_core_t *>(static_cast<void *>(static_cast<knurbs::object *>(c.get()))),
-			"com.example.c.checked");
+		knurbs_type_t *ct = knurbs_registry_find(c_handle(c), "com.example.c.checked");
 		assert_ptr_equal(static_cast<void *>(ct), static_cast<void *>(static_cast<knurbs::object *>(t.get())));
 		knurbs_data_t *cs = nullptr;
 		assert_int_equal(knurbs_data_create(&cs), KNURBS_OK);
@@ -453,6 +480,7 @@ static void test_c_registry_add_checks_info(void **)
 	c->registry().remove_module("fake-ok");
 	assert_false(static_cast<bool>(c->registry().find("com.example.c.checked")));
 	assert_int_equal(freed, 6);
+	reentry_core = nullptr;
 }
 
 static void test_c_registry_optional_callbacks(void **)
@@ -497,6 +525,11 @@ static void test_c_registry_add_alias(void **)
 	auto mods = c->modules().load(c->modules().discover({modules_dir()}));
 	knurbs_module_t *m = c_handle(by_name(mods, "fake-ok"));
 
+	// The module's core is a borrowed handle: no reference is taken.
+	const long refs = c->use_count();
+	assert_ptr_equal(knurbs_module_core(m), c_handle(c));
+	assert_int_equal(c->use_count(), refs);
+
 	assert_int_equal(knurbs_registry_add_alias(m, "fake_ok_old", "com.example.fake.ok"), KNURBS_OK);
 	assert_ptr_equal(c->registry().find("fake_ok_old").get(), c->registry().find("com.example.fake.ok").get());
 	assert_int_equal(knurbs_registry_add_alias(m, "fake_ok_old", "com.example.fake.ok"),
@@ -520,6 +553,7 @@ int main(void)
 		cmocka_unit_test_setup_teardown(test_load_registers_types, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_load_throwing_module, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_reject_other_major, remove_markers, remove_markers),
+		cmocka_unit_test_setup_teardown(test_reject_c_other_major, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_unload_on_shutdown, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_unload_all_runs_once, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_duplicate_name_fails, remove_markers, remove_markers),

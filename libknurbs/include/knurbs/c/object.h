@@ -13,7 +13,11 @@ extern "C" {
 typedef struct knurbs_object knurbs_object_t;
 typedef struct knurbs_weak knurbs_weak_t;
 
-/* Takes a new reference. NULL is ignored. */
+/* Takes a new reference. NULL is ignored. The object must be alive: the caller holds a reference, or a handle the
+ * library lent it (a callback's arguments, knurbs_module_core) while someone else does. Never call it on an object
+ * whose last reference is gone, such as a core during the shutdown its last knurbs_release started (a module's
+ * unload, or a type's destructor, may run then): that would revive it and destroy it twice. Builds of the
+ * library without NDEBUG assert this. */
 KNURBS_C_API void knurbs_ref(knurbs_object_t *object);
 /* Drops a reference; the last one destroys the object. NULL is ignored. */
 KNURBS_C_API void knurbs_release(knurbs_object_t *object);

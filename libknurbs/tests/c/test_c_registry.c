@@ -30,18 +30,15 @@ static int setup_core(void **state)
 	return 0;
 }
 
+static int remove_markers(void **state);
+
 static int teardown_core(void **state)
 {
 	knurbs_core_t *core = *state;
 	knurbs_core_shutdown(core);
 	knurbs_release((knurbs_object_t *)core);
 	/* The marker files the fake modules leave in the working directory. */
-	const char *const markers[] = {"fake-ok.load", "fake-ok.post_load", "fake-ok.unload", "fake-throws.load",
-				       "fake-c.load",  "fake-c.post_load",  "fake-c.unload",  "fake-c.free_param"};
-	for (size_t i = 0; i < sizeof(markers) / sizeof(markers[0]); ++i) {
-		remove(markers[i]);
-	}
-	return 0;
+	return remove_markers(NULL);
 }
 
 static void test_c_module_loads(void **state)
@@ -74,6 +71,8 @@ static void test_c_registry_find_missing(void **state)
 	assert_null(knurbs_registry_find(NULL, "com.example.fake.c"));
 }
 
+/* The alias, added through the C API, found through the C find; test_load_c_module (test_module.cpp) checks that it
+ * resolves through the C++ registry::find, too. */
 static void test_c_alias(void **state)
 {
 	knurbs_core_t *core = *state;
@@ -109,6 +108,33 @@ static void test_c_load_modules_checks_arguments(void **state)
 	assert_null(knurbs_module_core(NULL));
 }
 
+static void test_c_module_unload_on_last_release(void **state)
+{
+	(void)state;
+	knurbs_core_t *core = NULL;
+	assert_int_equal(knurbs_core_create("config", "cache", &core), KNURBS_OK);
+	const char *dirs[] = {KNURBS_TEST_MODULES_DIR};
+	assert_int_equal(knurbs_core_load_modules(core, dirs, 1), KNURBS_OK);
+	remove("fake-c.unload");
+
+	/* No knurbs_core_shutdown: the last release shuts the core down, and fake-c's unload uses its core then. */
+	knurbs_release((knurbs_object_t *)core);
+	FILE *marker = fopen("fake-c.unload", "r");
+	assert_non_null(marker);
+	fclose(marker);
+}
+
+static int remove_markers(void **state)
+{
+	(void)state;
+	const char *const markers[] = {"fake-ok.load", "fake-ok.post_load", "fake-ok.unload", "fake-throws.load",
+				       "fake-c.load",  "fake-c.post_load",  "fake-c.unload",  "fake-c.free_param"};
+	for (size_t i = 0; i < sizeof(markers) / sizeof(markers[0]); ++i) {
+		remove(markers[i]);
+	}
+	return 0;
+}
+
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
@@ -117,6 +143,7 @@ int main(void)
 		cmocka_unit_test_setup_teardown(test_c_alias, setup_core, teardown_core),
 		cmocka_unit_test_setup_teardown(test_c_type_defaults_checks_arguments, setup_core, teardown_core),
 		cmocka_unit_test_setup_teardown(test_c_load_modules_checks_arguments, setup_core, teardown_core),
+		cmocka_unit_test_teardown(test_c_module_unload_on_last_release, remove_markers),
 	};
 	return cmocka_run_group_tests(tests, NULL, NULL);
 }

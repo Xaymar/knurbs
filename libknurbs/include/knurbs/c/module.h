@@ -1,6 +1,5 @@
 #pragma once
 
-#include <stddef.h>
 #include <stdint.h>
 
 #include "knurbs/c/core.h"
@@ -51,18 +50,20 @@ struct knurbs_module_header {
  *     KNURBS_MODULE_EXPORT void knurbs_module_load(knurbs_module_t *m);       (required)
  *     KNURBS_MODULE_EXPORT void knurbs_module_post_load(knurbs_module_t *m);  (optional)
  *     KNURBS_MODULE_EXPORT void knurbs_module_unload(knurbs_module_t *m);     (optional)
- * They run when and on the threads that knurbs/module.hpp describes for C++ modules. A C entry point cannot fail the
+ * They run when and on the threads that knurbs/module.hpp describes for C++ modules, and must not call what it
+ * forbids there (knurbs_core_load_modules, knurbs_core_shutdown). A C entry point cannot fail the
  * module: what it does with the result of a failed call is up to it. It must not let a longjmp escape. */
 typedef struct knurbs_module knurbs_module_t;
 
-/* Returns the core that loaded the module, with a new reference, or NULL for NULL (or on failure). */
+/* Returns the core that loaded the module, or NULL for NULL: a borrowed handle, without a reference of its own (like
+ * knurbs::module::core()), so do not release it. It is valid for as long as the module handle, which covers every
+ * entry point.
+ *
+ * Do not take a reference to it with knurbs_ref during unload: unload may run inside the shutdown that the core's
+ * last knurbs_release started, when the core has no references left (see knurbs_ref). To keep the core, take the
+ * reference earlier, in load or post_load, and drop it again by unload at the latest (a reference still held then
+ * keeps the core from ever being destroyed). */
 KNURBS_C_API knurbs_core_t *knurbs_module_core(knurbs_module_t *module);
-
-/* Finds the modules in `search_dirs_utf8` (an array of `count` UTF-8 paths) and loads them, as
- * knurbs::module_manager::discover followed by load. A module that fails is logged and skipped; that is not an
- * error of this call. KNURBS_ERROR_INVALID_ARGUMENT for a NULL core, or a NULL array or path when count is not 0. */
-KNURBS_C_API knurbs_result knurbs_core_load_modules(knurbs_core_t *core, const char *const *search_dirs_utf8,
-						    size_t count);
 
 #ifdef __cplusplus
 }

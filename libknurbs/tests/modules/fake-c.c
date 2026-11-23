@@ -6,12 +6,29 @@
 
 #include "knurbs/c/core.h"
 #include "knurbs/c/data.h"
+#include "knurbs/c/log.h"
 #include "knurbs/c/module.h"
 #include "knurbs/c/object.h"
 #include "knurbs/c/properties.h"
 #include "knurbs/c/registry.h"
 
+#ifdef FAKE_C_API_MAJOR
+/* Built a second time, as fake-c-other-major, for another API major version: the loader must reject it before load
+ * runs. */
+KNURBS_MODULE_EXPORT const struct knurbs_module_header *knurbs_module_header(void);
+KNURBS_MODULE_EXPORT const struct knurbs_module_header *knurbs_module_header(void)
+{
+	static const struct knurbs_module_header header = {
+		sizeof(struct knurbs_module_header),
+		KNURBS_MODULE_API_C,
+		FAKE_C_API_MAJOR,
+		0,
+	};
+	return &header;
+}
+#else
 KNURBS_MODULE_C()
+#endif
 
 static void write_marker(const char *entry)
 {
@@ -93,11 +110,17 @@ KNURBS_MODULE_EXPORT void knurbs_module_post_load(knurbs_module_t *m)
 		write_marker("post_load");
 	}
 	knurbs_release((knurbs_object_t *)type);
-	knurbs_release((knurbs_object_t *)core);
+	/* The core is borrowed: not released. */
 }
 
 KNURBS_MODULE_EXPORT void knurbs_module_unload(knurbs_module_t *m)
 {
-	(void)m;
-	write_marker("unload");
+	/* Uses the core during unload, which may be the shutdown that the core's last release started. Marks unload
+	 * only if that worked. */
+	knurbs_core_t *core = knurbs_module_core(m);
+	knurbs_logger_t *logger = knurbs_core_logger(core);
+	if (logger && knurbs_log_write(logger, KNURBS_LOG_DEBUG, "fake-c: unload") == KNURBS_OK) {
+		write_marker("unload");
+	}
+	knurbs_release((knurbs_object_t *)logger);
 }

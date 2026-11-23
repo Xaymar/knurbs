@@ -72,8 +72,13 @@ target_compile_definitions(test_locale PRIVATE KNURBS_TEST_DATA_DIR="${CMAKE_CUR
 # modules/<name>/data/. The loader expects CMake's MODULE prefix and suffix (see libknurbs/CMakeLists.txt).
 set(_knurbs_test_modules_dir "${CMAKE_CURRENT_BINARY_DIR}/modules")
 
-# knurbs_add_fake_module(<name> <source>): tests/modules/<source> (C++, or C11 for a .c file), linked with libknurbs
+# knurbs_add_fake_module(<name> <source> [<modules dir>]): tests/modules/<source> (C++, or C11 for a .c file), linked
+# with libknurbs, in <modules dir> (default: the one test_module loads)
 function(knurbs_add_fake_module name source)
+  set(modules_dir "${_knurbs_test_modules_dir}")
+  if(ARGC GREATER 2)
+    set(modules_dir "${ARGV2}")
+  endif()
   add_library(${name} MODULE modules/${source})
   # The C headers must stay clean C11
   if(source MATCHES "\\.c$" AND NOT MSVC)
@@ -93,10 +98,10 @@ function(knurbs_add_fake_module name source)
       C_VISIBILITY_PRESET hidden
       CXX_VISIBILITY_PRESET hidden
       VISIBILITY_INLINES_HIDDEN ON
-      LIBRARY_OUTPUT_DIRECTORY "$<1:${_knurbs_test_modules_dir}/${name}/bin>"
-      RUNTIME_OUTPUT_DIRECTORY "$<1:${_knurbs_test_modules_dir}/${name}/bin>"
+      LIBRARY_OUTPUT_DIRECTORY "$<1:${modules_dir}/${name}/bin>"
+      RUNTIME_OUTPUT_DIRECTORY "$<1:${modules_dir}/${name}/bin>"
   )
-  file(MAKE_DIRECTORY "${_knurbs_test_modules_dir}/${name}/data")
+  file(MAKE_DIRECTORY "${modules_dir}/${name}/data")
   add_dependencies(knurbs-tests ${name})
   set_property(GLOBAL APPEND PROPERTY _knurbs_fake_modules ${name})
 endfunction()
@@ -105,11 +110,20 @@ knurbs_add_fake_module(fake-c fake-c.c)
 knurbs_add_fake_module(fake-ok fake-ok.cpp)
 knurbs_add_fake_module(fake-throws fake-throws.cpp)
 knurbs_add_fake_module(fake-other-major fake-other-major.cpp)
+# fake-c for another API major version, kept out of the directory above
+set(_knurbs_test_other_modules_dir "${CMAKE_CURRENT_BINARY_DIR}/other-modules")
+knurbs_add_fake_module(fake-c-other-major fake-c.c "${_knurbs_test_other_modules_dir}")
+target_compile_definitions(fake-c-other-major PRIVATE FAKE_C_API_MAJOR=99)
 
 knurbs_add_test(test_module)
 get_property(_knurbs_fake_modules GLOBAL PROPERTY _knurbs_fake_modules)
 add_dependencies(test_module ${_knurbs_fake_modules})
-target_compile_definitions(test_module PRIVATE KNURBS_TEST_MODULES_DIR="${_knurbs_test_modules_dir}")
+target_compile_definitions(
+  test_module
+  PRIVATE
+    KNURBS_TEST_MODULES_DIR="${_knurbs_test_modules_dir}"
+    KNURBS_TEST_OTHER_MODULES_DIR="${_knurbs_test_other_modules_dir}"
+)
 
 # C11 with -pedantic: includes the C headers for objects, core, logging and modules
 knurbs_add_test(test_c_object C)

@@ -47,7 +47,9 @@ public:
 	object &operator=(const object &) = delete;
 	object &operator=(object &&) = delete;
 
-	// Unconditional increment; the caller must already hold a reference.
+	// Unconditional increment; the caller must already hold a reference, or know someone else does. Never on an
+	// object whose last reference is gone (inside its destroy()): that revives it, and it is destroyed twice.
+	// Asserted in builds without NDEBUG.
 	void acquire() noexcept;
 	// Increments only while the count is above 0. Returns false once the object is dying.
 	bool try_acquire() noexcept;

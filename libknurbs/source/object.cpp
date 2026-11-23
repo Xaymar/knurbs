@@ -1,5 +1,6 @@
 #include "knurbs/object.hpp"
 
+#include <cassert>
 #include <cstdint>
 #include <thread>
 
@@ -132,7 +133,9 @@ void object::destroy() noexcept
 
 void object::acquire() noexcept
 {
-	refs_.fetch_add(1, std::memory_order_relaxed);
+	[[maybe_unused]] const long previous = refs_.fetch_add(1, std::memory_order_relaxed);
+	// 0 means the object is being destroyed: reviving it would destroy it twice.
+	assert(previous > 0 && "object::acquire on an object without references");
 }
 
 bool object::try_acquire() noexcept

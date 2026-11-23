@@ -1,10 +1,13 @@
 #include "knurbs/c/core.h"
 
+#include <filesystem>
 #include <string_view>
+#include <vector>
 
 #include "c-guard.hpp"
 #include "knurbs/core.hpp"
 #include "knurbs/error.hpp"
+#include "knurbs/module.hpp"
 #include "knurbs/platform.hpp"
 #include "knurbs/ref.hpp"
 
@@ -47,6 +50,23 @@ knurbs_logger_t *knurbs_core_logger(knurbs_core_t *handle)
 		});
 	}
 	return result;
+}
+
+knurbs_result knurbs_core_load_modules(knurbs_core_t *handle, const char *const *search_dirs_utf8, size_t count)
+{
+	return detail::c_guard([&] {
+		core &c = detail::c_self<core>(handle, "core");
+		if (count && !search_dirs_utf8) {
+			detail::c_null_argument("search_dirs_utf8");
+		}
+		std::vector<std::filesystem::path> dirs;
+		dirs.reserve(count);
+		for (size_t i = 0; i < count; ++i) {
+			dirs.push_back(
+				platform::path_from_utf8(detail::c_text(search_dirs_utf8[i], "search directory")));
+		}
+		c.modules().load(c.modules().discover(dirs));
+	});
 }
 
 } // extern "C"
