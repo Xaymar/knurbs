@@ -21,6 +21,13 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <obs.h>
 #include <obs-module.h>
 #include <util/platform.h>
@@ -47,6 +54,27 @@ static const int WANT_PACKETS = 120;
 
 static int argc_;
 static char **argv_;
+// libobs logs "encoder '<name>' (<id>) rerouted to <id>" when a texture encoder falls back to its raw variant.
+static volatile bool rerouted = false;
+static volatile bool encoder_validation_failed = false;
+
+static void log_handler(int level, const char *format, va_list args, void *)
+{
+	char line[4096];
+	vsnprintf(line, sizeof(line), format, args);
+	if (strstr(line, "rerouted to")) {
+		rerouted = true;
+	}
+	// obs-ffmpeg's AMF device has its own validation (texture-amf-vulkan.cpp) and reports its count at the end.
+	if (strstr(line, "validation messages on the AMF device")) {
+		encoder_validation_failed = true;
+	}
+	const char *names[] = {"error", "warning", "info", "debug"};
+	const int i = level <= LOG_ERROR ? 0 : level <= LOG_WARNING ? 1 : level <= LOG_INFO ? 2 : 3;
+	printf("%s: %s\n", names[i], line);
+	fflush(stdout);
+}
+
 // Full-frame quads drawn under the pattern each frame ("overdraw=N"), so the GPU is still busy when the encoder
 // thread picks the frame up: without that, a missing GPU wait never shows on a small frame.
 static int overdraw = 0;
@@ -306,6 +334,13 @@ static int check_frames(const std::vector<decoded> &frames)
 		print_message("stall=%d gave no repeated frames: the case under test did not happen\n", stall);
 		++failures;
 	}
+	if (failures) { // the whole sequence, for diagnosis
+		std::string seq;
+		for (const decoded &d : frames) {
+			seq += std::to_string(d.w == W && d.h == H ? read_number(d, 0) : 0) + " ";
+		}
+		print_message("decoded numbers: %s\n", seq.c_str());
+	}
 	if (distinct < WANT_PACKETS / 2) {
 		print_message("too few distinct frames\n");
 		++failures;
@@ -348,6 +383,8 @@ static int reset_video(const char *module, enum video_format format)
 	ovi.colorspace = VIDEO_CS_709; // P010 too: SDR, so the grey levels stay linear in Y
 	ovi.range = VIDEO_RANGE_PARTIAL;
 	ovi.scale_type = OBS_SCALE_BICUBIC;
+	const char *adapter = getenv("OBS_TEST_ADAPTER"); // as test_vulkan_video
+	ovi.adapter = adapter ? (uint32_t)atoi(adapter) : 0;
 	return obs_reset_video(&ovi);
 }
 
@@ -372,6 +409,7 @@ static void test_encode(void **)
 	auto messages = (int (*)(void))os_dlsym(own, "obs_vulkan_validation_messages");
 	assert_non_null(messages);
 	_putenv_s("OBS_VULKAN_VALIDATION", "1");
+	base_set_log_handler(log_handler, nullptr);
 
 	assert_true(obs_startup("en-US", nullptr, nullptr));
 #pragma warning(push)
@@ -394,6 +432,9 @@ static void test_encode(void **)
 	assert_true(tex_ok);
 	print_message("renderer adapter: vendor %04x device %04x\n", id.vendor_id, id.device_id);
 
+	// libobs loads modules with a search path that leaves out PATH; outside an install tree the module's own
+	// dependencies (FFmpeg for obs-ffmpeg) are only found there, so load it the usual way first.
+	HMODULE preloaded = LoadLibraryA(module);
 	obs_module_t *mod = nullptr;
 	if (obs_open_module(&mod, module, nullptr) != MODULE_SUCCESS || !obs_init_module(mod)) {
 		skip_test(own, "encoder module did not load (no such GPU?)");
@@ -433,8 +474,9 @@ static void test_encode(void **)
 	assert_false(obs_video_active());
 
 	// The encoder must have run as a texture encoder, not a rerouted raw one.
-	const char *ran = obs_encoder_get_id(encoder);
-	print_message("encoder %s ran as %s\n", encoder_id, ran);
+	if (rerouted) {
+		fail_msg("the encoder rerouted itself (to its non-texture variant): the texture path did not run");
+	}
 
 	uint8_t *extra = nullptr;
 	size_t extra_size = 0;
@@ -455,6 +497,9 @@ static void test_encode(void **)
 	collected = nullptr;
 	os_event_destroy(pk.done);
 	obs_shutdown();
+	if (preloaded) {
+		FreeLibrary(preloaded);
+	}
 
 	if (waited != 0) {
 		fail_msg("timed out with %zu of %d packets", data.size(), WANT_PACKETS);
@@ -463,6 +508,7 @@ static void test_encode(void **)
 	assert_true(frames.size() >= (size_t)WANT_PACKETS * 3 / 4);
 	assert_int_equal(check_frames(frames), 0);
 
+	assert_false(encoder_validation_failed);
 	const int n = messages();
 	if (n < 0) {
 		print_message("validation layer missing, not checked\n");
