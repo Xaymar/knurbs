@@ -1,4 +1,3 @@
-// Standard headers come before test.hpp: cmocka defines a fail() macro that breaks <ios>.
 #include <atomic>
 #include <barrier>
 #include <thread>

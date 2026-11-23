@@ -1,5 +1,17 @@
 #pragma once
 
+// Standard headers that tests use come first: cmocka defines a fail() macro that breaks <ios> and friends if
+// they are included after it.
+#include <atomic>
+#include <barrier>
+#include <format>
+#include <ios>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <vector>
+
 #include <csetjmp>
 #include <cstdarg>
 #include <cstddef>
