@@ -24,6 +24,10 @@ add_library(knurbs::knurbs ALIAS libknurbs)
 target_sources(
   libknurbs
   PRIVATE
+    source/c/c-guard.hpp
+    source/c/core.cpp
+    source/c/log.cpp
+    source/c/object.cpp
     source/core-impl.hpp
     source/core.cpp
     source/data-impl.hpp

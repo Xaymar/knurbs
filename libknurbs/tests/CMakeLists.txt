@@ -31,6 +31,10 @@ function(knurbs_add_test name)
       ${name}
       PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
     )
+    # The C headers must stay clean C11
+    if(NOT MSVC)
+      target_compile_options(${name} PRIVATE -Wall -Wextra -pedantic)
+    endif()
   else()
     add_executable(${name} ${name}.cpp)
   endif()
@@ -97,3 +101,6 @@ knurbs_add_test(test_module)
 get_property(_knurbs_fake_modules GLOBAL PROPERTY _knurbs_fake_modules)
 add_dependencies(test_module ${_knurbs_fake_modules})
 target_compile_definitions(test_module PRIVATE KNURBS_TEST_MODULES_DIR="${_knurbs_test_modules_dir}")
+
+# Includes every C header, compiled as C11 with -pedantic
+knurbs_add_test(test_c_object C)
