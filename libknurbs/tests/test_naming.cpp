@@ -7,7 +7,7 @@ using knurbs::naming::check_key;
 using knurbs::naming::is_valid_key;
 using knurbs::naming::is_valid_type_id;
 
-static void test_valid_keys(void **)
+static void test_valid_keys(void**)
 {
 	assert_true(is_valid_key("frame-rate"));
 	assert_true(is_valid_key("dshow.control.gain"));
@@ -23,7 +23,7 @@ static void test_valid_keys(void **)
 	assert_false(is_valid_key("\xC3\xBC"));
 }
 
-static void test_type_ids(void **)
+static void test_type_ids(void**)
 {
 	assert_true(is_valid_type_id("com.xaymar.knurbs.capture.video-device"));
 	assert_true(is_valid_type_id("com.xaymar.knurbs"));
@@ -33,7 +33,7 @@ static void test_type_ids(void **)
 	assert_false(is_valid_type_id("1com.x.y"));
 }
 
-static void test_check_key_throws(void **)
+static void test_check_key_throws(void**)
 {
 	KNURBS_ASSERT_THROWS(check_key("Bad_Key"), knurbs::error::invalid_argument);
 	check_key("good-key");

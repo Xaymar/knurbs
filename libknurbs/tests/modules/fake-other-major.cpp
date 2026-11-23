@@ -6,7 +6,7 @@
 
 #include "knurbs/module.hpp"
 
-extern "C" KNURBS_MODULE_EXPORT const struct knurbs_module_header *knurbs_module_header(void)
+extern "C" KNURBS_MODULE_EXPORT const struct knurbs_module_header* knurbs_module_header(void)
 {
 	static constexpr struct knurbs_module_header header = {
 		sizeof(struct knurbs_module_header),
@@ -17,7 +17,7 @@ extern "C" KNURBS_MODULE_EXPORT const struct knurbs_module_header *knurbs_module
 	return &header;
 }
 
-extern "C" KNURBS_MODULE_EXPORT void knurbs_module_load(knurbs::module *m)
+extern "C" KNURBS_MODULE_EXPORT void knurbs_module_load(knurbs::module* m)
 {
 	std::ofstream(std::string(m->name()) + ".load") << "ran\n";
 }

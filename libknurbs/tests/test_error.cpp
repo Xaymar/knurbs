@@ -8,14 +8,15 @@
 
 namespace e = knurbs::error;
 
-template<typename T> static void check_subclass(e::code expected)
+template<typename T>
+static void check_subclass(e::code expected)
 {
 	T ex("message " + std::to_string(static_cast<int>(expected)));
 	assert_int_equal(static_cast<int>(ex.value()), static_cast<int>(expected));
 	assert_string_equal(ex.what(), ("message " + std::to_string(static_cast<int>(expected))).c_str());
 }
 
-static void test_subclass_codes(void **)
+static void test_subclass_codes(void**)
 {
 	check_subclass<e::invalid_argument>(e::code::invalid_argument);
 	check_subclass<e::not_found>(e::code::not_found);
@@ -29,14 +30,14 @@ static void test_subclass_codes(void **)
 	check_subclass<e::version_mismatch>(e::code::version_mismatch);
 }
 
-static void test_catch_as_base(void **)
+static void test_catch_as_base(void**)
 {
 	KNURBS_ASSERT_THROWS(throw e::not_found("x"), e::exception);
 	KNURBS_ASSERT_THROWS(throw e::not_found("x"), std::runtime_error);
 	KNURBS_ASSERT_THROWS(throw e::not_found("x"), e::not_found);
 }
 
-static void test_to_string(void **)
+static void test_to_string(void**)
 {
 	assert_true(e::to_string(e::code::core_gone) == "core-gone");
 	assert_true(e::to_string(e::code::invalid_argument) == "invalid-argument");

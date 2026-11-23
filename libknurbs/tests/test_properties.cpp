@@ -11,7 +11,7 @@ using knurbs::property_kind;
 using knurbs::ref;
 namespace error = knurbs::error;
 
-static void test_add_and_find(void **)
+static void test_add_and_find(void**)
 {
 	ref<properties> props = properties::create();
 	ref<properties> inner = properties::create();
@@ -38,7 +38,7 @@ static void test_add_and_find(void **)
 	assert_true(props->find("audio")->group().get() == inner.get());
 }
 
-static void test_insertion_order_and_kinds(void **)
+static void test_insertion_order_and_kinds(void**)
 {
 	ref<properties> props = properties::create();
 	props->add_bool("b", "B");
@@ -52,10 +52,8 @@ static void test_insertion_order_and_kinds(void **)
 	list->add_item("Two", "2");
 	assert_int_equal(list->item_count(), 2);
 
-	const property_kind expected[] = {property_kind::boolean, property_kind::floating, property_kind::text,
-					  property_kind::path,    property_kind::list,     property_kind::color,
-					  property_kind::notice};
-	auto all = props->list();
+	const property_kind expected[] = {property_kind::boolean, property_kind::floating, property_kind::text, property_kind::path, property_kind::list, property_kind::color, property_kind::notice};
+	auto                all        = props->list();
 	assert_int_equal(all.size(), 7);
 	for (size_t i = 0; i < all.size(); ++i) {
 		assert_true(all[i]->kind() == expected[i]);
@@ -63,14 +61,14 @@ static void test_insertion_order_and_kinds(void **)
 	assert_true(all[6]->label() == "Careful");
 }
 
-static void test_duplicate_id_throws(void **)
+static void test_duplicate_id_throws(void**)
 {
 	ref<properties> props = properties::create();
 	props->add_bool("a", "A");
 	KNURBS_ASSERT_THROWS(props->add_text("a", "Again"), error::already_exists);
 }
 
-static void test_invalid_arguments_throw(void **)
+static void test_invalid_arguments_throw(void**)
 {
 	ref<properties> props = properties::create();
 	KNURBS_ASSERT_THROWS(props->add_int("a", "A", 5, 1, 1), error::invalid_argument);
@@ -86,10 +84,10 @@ static void test_invalid_arguments_throw(void **)
 	KNURBS_ASSERT_THROWS(child->add_group("parent", "Parent", props), error::invalid_argument);
 }
 
-static void test_wrong_kind_throws(void **)
+static void test_wrong_kind_throws(void**)
 {
 	ref<properties> props = properties::create();
-	ref<property> text = props->add_text("t", "T");
+	ref<property>   text  = props->add_text("t", "T");
 	KNURBS_ASSERT_THROWS(text->min(), error::invalid_argument);
 	KNURBS_ASSERT_THROWS(text->max(), error::invalid_argument);
 	KNURBS_ASSERT_THROWS(text->step(), error::invalid_argument);
@@ -99,11 +97,11 @@ static void test_wrong_kind_throws(void **)
 	KNURBS_ASSERT_THROWS(text->click(), error::invalid_argument);
 }
 
-static void test_modified_callback(void **)
+static void test_modified_callback(void**)
 {
 	ref<properties> props = properties::create();
 	props->add_bool("a", "A");
-	props->set_modified("a", [](properties &, property &p, data &settings) {
+	props->set_modified("a", [](properties&, property& p, data& settings) {
 		settings.set_bool("b", p.id() == "a");
 		return true;
 	});
@@ -113,14 +111,14 @@ static void test_modified_callback(void **)
 	assert_false(props->notify_modified("other", *settings));
 }
 
-static void test_callback_releases_properties(void **)
+static void test_callback_releases_properties(void**)
 {
 	ref<properties> props = properties::create();
 	props->add_bool("a", "A");
 	ref<data> settings = data::create();
 	// The callback drops the caller's last external ref; the call keeps the object alive until it returns.
-	auto *holder = &props;
-	props->set_modified("a", [holder](properties &self, property &, data &s) {
+	auto* holder = &props;
+	props->set_modified("a", [holder](properties& self, property&, data& s) {
 		holder->reset();
 		// Still usable: the object is kept alive for the duration of the callback.
 		bool found = static_cast<bool>(self.find("a"));
@@ -128,16 +126,16 @@ static void test_callback_releases_properties(void **)
 		s.set_bool("found", found);
 		return found;
 	});
-	properties *raw = props.get();
+	properties* raw = props.get();
 	assert_true(raw->notify_modified("a", *settings));
 	assert_true(settings->get_bool("found"));
 }
 
-static void test_button(void **)
+static void test_button(void**)
 {
-	ref<properties> props = properties::create();
-	int clicks = 0;
-	ref<property> button = props->add_button("go", "Go", [&clicks](properties &self, property &p) {
+	ref<properties> props  = properties::create();
+	int             clicks = 0;
+	ref<property>   button = props->add_button("go", "Go", [&clicks](properties& self, property& p) {
 		++clicks;
 		return self.find("go").get() == &p;
 	});
@@ -150,27 +148,30 @@ static void test_button(void **)
 }
 
 namespace {
-// Calls back into the properties from its destructor, which deadlocks if that runs under the properties' lock.
-struct find_on_destroy {
-	properties *props;
-	int *destroyed;
-	find_on_destroy(properties *p, int *d) : props(p), destroyed(d) {}
-	find_on_destroy(find_on_destroy &&other) noexcept : props(other.props), destroyed(other.destroyed)
-	{
-		other.props = nullptr;
-	}
-	~find_on_destroy()
-	{
-		if (props) {
-			props->find("gain");
-			++*destroyed;
+	// Calls back into the properties from its destructor, which deadlocks if that runs under the properties' lock.
+	struct find_on_destroy {
+		properties* props;
+		int*        destroyed;
+		find_on_destroy(properties* p, int* d) : props(p), destroyed(d) {}
+		find_on_destroy(find_on_destroy&& other) noexcept : props(other.props), destroyed(other.destroyed)
+		{
+			other.props = nullptr;
 		}
-	}
-	bool operator()(properties &, property &, data &) const { return true; }
-};
+		~find_on_destroy()
+		{
+			if (props) {
+				props->find("gain");
+				++*destroyed;
+			}
+		}
+		bool operator()(properties&, property&, data&) const
+		{
+			return true;
+		}
+	};
 } // namespace
 
-static void test_replaced_callback_destroyed_outside_lock(void **)
+static void test_replaced_callback_destroyed_outside_lock(void**)
 {
 	ref<properties> props = properties::create();
 	props->add_int("gain", "Gain", 0, 1, 0.1);
@@ -193,15 +194,7 @@ static void test_replaced_callback_destroyed_outside_lock(void **)
 int main()
 {
 	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_add_and_find),
-		cmocka_unit_test(test_insertion_order_and_kinds),
-		cmocka_unit_test(test_duplicate_id_throws),
-		cmocka_unit_test(test_invalid_arguments_throw),
-		cmocka_unit_test(test_wrong_kind_throws),
-		cmocka_unit_test(test_modified_callback),
-		cmocka_unit_test(test_callback_releases_properties),
-		cmocka_unit_test(test_button),
-		cmocka_unit_test(test_replaced_callback_destroyed_outside_lock),
+		cmocka_unit_test(test_add_and_find), cmocka_unit_test(test_insertion_order_and_kinds), cmocka_unit_test(test_duplicate_id_throws), cmocka_unit_test(test_invalid_arguments_throw), cmocka_unit_test(test_wrong_kind_throws), cmocka_unit_test(test_modified_callback), cmocka_unit_test(test_callback_releases_properties), cmocka_unit_test(test_button), cmocka_unit_test(test_replaced_callback_destroyed_outside_lock),
 	};
 	return cmocka_run_group_tests(tests, nullptr, nullptr);
 }

@@ -20,14 +20,7 @@ extern "C" {
 typedef struct knurbs_type knurbs_type_t;
 
 /* Values of knurbs::type_kind, for knurbs_type_info.kind; only ever appended. */
-typedef enum knurbs_type_kind {
-	KNURBS_TYPE_SOURCE = 0,
-	KNURBS_TYPE_FILTER = 1,
-	KNURBS_TYPE_TRANSITION = 2,
-	KNURBS_TYPE_ENCODER = 3,
-	KNURBS_TYPE_OUTPUT = 4,
-	KNURBS_TYPE_SERVICE = 5
-} knurbs_type_kind;
+typedef enum knurbs_type_kind { KNURBS_TYPE_SOURCE = 0, KNURBS_TYPE_FILTER = 1, KNURBS_TYPE_TRANSITION = 2, KNURBS_TYPE_ENCODER = 3, KNURBS_TYPE_OUTPUT = 4, KNURBS_TYPE_SERVICE = 5 } knurbs_type_kind;
 
 /* A type implemented in C. Fields are only ever appended; the library reads only the first `size` bytes, and
  * needs at least every field up to and including `free_param`.
@@ -39,21 +32,21 @@ struct knurbs_type_info {
 	/* sizeof(struct knurbs_type_info) as the caller was built. */
 	uint32_t size;
 	/* A valid type ID (reverse-DNS, see knurbs::naming::is_valid_type_id). Copied: it need not outlive the call. */
-	const char *id;
+	const char* id;
 	/* A knurbs_type_kind. */
 	uint32_t kind;
 	/* The version of the type, knurbs::type::version(). */
 	uint32_t version;
 	/* Fills in the default values of the settings. May be NULL: no defaults. */
-	void (*defaults)(void *param, knurbs_data_t *settings);
+	void (*defaults)(void* param, knurbs_data_t* settings);
 	/* Describes the settings of an object of this type. Returns an owned reference, which the library takes over,
 	 * or NULL for no properties (an empty list). The settings are only read; the read-only functions of
 	 * knurbs/c/data.h take the const handle as it is. May be NULL: no properties. */
-	knurbs_properties_t *(*properties)(void *param, const knurbs_data_t *settings);
+	knurbs_properties_t* (*properties)(void* param, const knurbs_data_t* settings);
 	/* Passed to every callback. */
-	void *param;
+	void* param;
 	/* Called once with `param` when the type is destroyed. May be NULL. */
-	void (*free_param)(void *param);
+	void (*free_param)(void* param);
 };
 
 /* Registers a type, owned by `module` (registry::add with module's name as owner_module: knurbs::registry::
@@ -67,18 +60,18 @@ struct knurbs_type_info {
  * KNURBS_ERROR_INVALID_ARGUMENT also for a NULL module or id, an unknown kind, or an id that is not a valid type ID;
  * KNURBS_ERROR_ALREADY_EXISTS when the id is already registered or is the old ID of an alias; KNURBS_ERROR_CORE_GONE
  * once the core is shutting down or destroyed (see knurbs_module_core). */
-KNURBS_C_API knurbs_result knurbs_registry_add(knurbs_module_t *module, const struct knurbs_type_info *info);
+KNURBS_C_API knurbs_result knurbs_registry_add(knurbs_module_t* module, const struct knurbs_type_info* info);
 
 /* Makes `old_id` find the type `new_id` (knurbs::registry::add_alias), owned by `module` as for
  * knurbs_registry_add. */
-KNURBS_C_API knurbs_result knurbs_registry_add_alias(knurbs_module_t *module, const char *old_id, const char *new_id);
+KNURBS_C_API knurbs_result knurbs_registry_add_alias(knurbs_module_t* module, const char* old_id, const char* new_id);
 
 /* The type with this ID, following aliases, with a new reference; NULL if there is none, and for a NULL core or id,
  * or on failure (such as a core that is shutting down; knurbs_last_error has the message then). */
-KNURBS_C_API knurbs_type_t *knurbs_registry_find(knurbs_core_t *core, const char *id);
+KNURBS_C_API knurbs_type_t* knurbs_registry_find(knurbs_core_t* core, const char* id);
 
 /* Fills in the type's default values of `settings` (knurbs::type::defaults). */
-KNURBS_C_API knurbs_result knurbs_type_defaults(knurbs_type_t *type, knurbs_data_t *settings);
+KNURBS_C_API knurbs_result knurbs_type_defaults(knurbs_type_t* type, knurbs_data_t* settings);
 
 #ifdef __cplusplus
 }

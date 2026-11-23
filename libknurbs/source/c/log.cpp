@@ -13,7 +13,7 @@ static_assert(KNURBS_LOG_ERROR == static_cast<int>(log::level::error));
 
 extern "C" {
 
-knurbs_result knurbs_log_write(knurbs_logger_t *handle, int level, const char *utf8)
+knurbs_result knurbs_log_write(knurbs_logger_t* handle, int level, const char* utf8)
 {
 	return detail::c_guard([&] {
 		if (!handle || !utf8) {

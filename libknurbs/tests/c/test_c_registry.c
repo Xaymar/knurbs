@@ -15,39 +15,39 @@
 #include "knurbs/c/result.h"
 
 /* A core with the fake modules loaded, shut down and released by teardown. */
-static int setup_core(void **state)
+static int setup_core(void** state)
 {
-	knurbs_core_t *core = NULL;
+	knurbs_core_t* core = NULL;
 	if (knurbs_core_create("config", "cache", &core) != KNURBS_OK) {
 		return -1;
 	}
-	const char *dirs[] = {KNURBS_TEST_MODULES_DIR};
+	const char* dirs[] = {KNURBS_TEST_MODULES_DIR};
 	if (knurbs_core_load_modules(core, dirs, 1) != KNURBS_OK) {
-		knurbs_release((knurbs_object_t *)core);
+		knurbs_release((knurbs_object_t*)core);
 		return -1;
 	}
 	*state = core;
 	return 0;
 }
 
-static int remove_markers(void **state);
+static int remove_markers(void** state);
 
-static int teardown_core(void **state)
+static int teardown_core(void** state)
 {
-	knurbs_core_t *core = *state;
+	knurbs_core_t* core = *state;
 	knurbs_core_shutdown(core);
-	knurbs_release((knurbs_object_t *)core);
+	knurbs_release((knurbs_object_t*)core);
 	/* The marker files the fake modules leave in the working directory. */
 	return remove_markers(NULL);
 }
 
-static void test_c_module_loads(void **state)
+static void test_c_module_loads(void** state)
 {
-	knurbs_core_t *core = *state;
-	knurbs_type_t *type = knurbs_registry_find(core, "com.example.fake.c");
+	knurbs_core_t* core = *state;
+	knurbs_type_t* type = knurbs_registry_find(core, "com.example.fake.c");
 	assert_non_null(type);
 
-	knurbs_data_t *settings = NULL;
+	knurbs_data_t* settings = NULL;
 	assert_int_equal(knurbs_data_create(&settings), KNURBS_OK);
 	assert_int_equal(knurbs_type_defaults(type, settings), KNURBS_OK);
 	int64_t gain = 0;
@@ -55,17 +55,17 @@ static void test_c_module_loads(void **state)
 	assert_int_equal(gain, 5);
 
 	/* A C++ module's type is found through the C API, too. */
-	knurbs_type_t *cpp_type = knurbs_registry_find(core, "com.example.fake.ok");
+	knurbs_type_t* cpp_type = knurbs_registry_find(core, "com.example.fake.ok");
 	assert_non_null(cpp_type);
 
-	knurbs_release((knurbs_object_t *)cpp_type);
-	knurbs_release((knurbs_object_t *)settings);
-	knurbs_release((knurbs_object_t *)type);
+	knurbs_release((knurbs_object_t*)cpp_type);
+	knurbs_release((knurbs_object_t*)settings);
+	knurbs_release((knurbs_object_t*)type);
 }
 
-static void test_c_registry_find_missing(void **state)
+static void test_c_registry_find_missing(void** state)
 {
-	knurbs_core_t *core = *state;
+	knurbs_core_t* core = *state;
 	assert_null(knurbs_registry_find(core, "com.example.none"));
 	assert_null(knurbs_registry_find(core, NULL));
 	assert_null(knurbs_registry_find(NULL, "com.example.fake.c"));
@@ -73,33 +73,33 @@ static void test_c_registry_find_missing(void **state)
 
 /* The alias, added through the C API, found through the C find; test_load_c_module (test_module.cpp) checks that it
  * resolves through the C++ registry::find, too. */
-static void test_c_alias(void **state)
+static void test_c_alias(void** state)
 {
-	knurbs_core_t *core = *state;
-	knurbs_type_t *by_alias = knurbs_registry_find(core, "fake_c_old");
-	knurbs_type_t *by_id = knurbs_registry_find(core, "com.example.fake.c");
+	knurbs_core_t* core     = *state;
+	knurbs_type_t* by_alias = knurbs_registry_find(core, "fake_c_old");
+	knurbs_type_t* by_id    = knurbs_registry_find(core, "com.example.fake.c");
 	assert_non_null(by_alias);
 	assert_ptr_equal(by_alias, by_id);
-	knurbs_release((knurbs_object_t *)by_id);
-	knurbs_release((knurbs_object_t *)by_alias);
+	knurbs_release((knurbs_object_t*)by_id);
+	knurbs_release((knurbs_object_t*)by_alias);
 }
 
-static void test_c_type_defaults_checks_arguments(void **state)
+static void test_c_type_defaults_checks_arguments(void** state)
 {
-	knurbs_core_t *core = *state;
-	knurbs_type_t *type = knurbs_registry_find(core, "com.example.fake.c");
-	knurbs_data_t *settings = NULL;
+	knurbs_core_t* core     = *state;
+	knurbs_type_t* type     = knurbs_registry_find(core, "com.example.fake.c");
+	knurbs_data_t* settings = NULL;
 	assert_int_equal(knurbs_data_create(&settings), KNURBS_OK);
 	assert_int_equal(knurbs_type_defaults(NULL, settings), KNURBS_ERROR_INVALID_ARGUMENT);
 	assert_int_equal(knurbs_type_defaults(type, NULL), KNURBS_ERROR_INVALID_ARGUMENT);
-	knurbs_release((knurbs_object_t *)settings);
-	knurbs_release((knurbs_object_t *)type);
+	knurbs_release((knurbs_object_t*)settings);
+	knurbs_release((knurbs_object_t*)type);
 }
 
-static void test_c_load_modules_checks_arguments(void **state)
+static void test_c_load_modules_checks_arguments(void** state)
 {
-	knurbs_core_t *core = *state;
-	const char *dirs[] = {NULL};
+	knurbs_core_t* core   = *state;
+	const char*    dirs[] = {NULL};
 	assert_int_equal(knurbs_core_load_modules(NULL, NULL, 0), KNURBS_ERROR_INVALID_ARGUMENT);
 	assert_int_equal(knurbs_core_load_modules(core, NULL, 1), KNURBS_ERROR_INVALID_ARGUMENT);
 	assert_int_equal(knurbs_core_load_modules(core, dirs, 1), KNURBS_ERROR_INVALID_ARGUMENT);
@@ -108,27 +108,26 @@ static void test_c_load_modules_checks_arguments(void **state)
 	assert_null(knurbs_module_core(NULL));
 }
 
-static void test_c_module_unload_on_last_release(void **state)
+static void test_c_module_unload_on_last_release(void** state)
 {
 	(void)state;
-	knurbs_core_t *core = NULL;
+	knurbs_core_t* core = NULL;
 	assert_int_equal(knurbs_core_create("config", "cache", &core), KNURBS_OK);
-	const char *dirs[] = {KNURBS_TEST_MODULES_DIR};
+	const char* dirs[] = {KNURBS_TEST_MODULES_DIR};
 	assert_int_equal(knurbs_core_load_modules(core, dirs, 1), KNURBS_OK);
 	remove("fake-c.unload");
 
 	/* No knurbs_core_shutdown: the last release shuts the core down, and fake-c's unload uses its core then. */
-	knurbs_release((knurbs_object_t *)core);
-	FILE *marker = fopen("fake-c.unload", "r");
+	knurbs_release((knurbs_object_t*)core);
+	FILE* marker = fopen("fake-c.unload", "r");
 	assert_non_null(marker);
 	fclose(marker);
 }
 
-static int remove_markers(void **state)
+static int remove_markers(void** state)
 {
 	(void)state;
-	const char *const markers[] = {"fake-ok.load", "fake-ok.post_load", "fake-ok.unload", "fake-throws.load",
-				       "fake-c.load",  "fake-c.post_load",  "fake-c.unload",  "fake-c.free_param"};
+	const char* const markers[] = {"fake-ok.load", "fake-ok.post_load", "fake-ok.unload", "fake-throws.load", "fake-c.load", "fake-c.post_load", "fake-c.unload", "fake-c.free_param"};
 	for (size_t i = 0; i < sizeof(markers) / sizeof(markers[0]); ++i) {
 		remove(markers[i]);
 	}
@@ -138,12 +137,7 @@ static int remove_markers(void **state)
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
-		cmocka_unit_test_setup_teardown(test_c_module_loads, setup_core, teardown_core),
-		cmocka_unit_test_setup_teardown(test_c_registry_find_missing, setup_core, teardown_core),
-		cmocka_unit_test_setup_teardown(test_c_alias, setup_core, teardown_core),
-		cmocka_unit_test_setup_teardown(test_c_type_defaults_checks_arguments, setup_core, teardown_core),
-		cmocka_unit_test_setup_teardown(test_c_load_modules_checks_arguments, setup_core, teardown_core),
-		cmocka_unit_test_teardown(test_c_module_unload_on_last_release, remove_markers),
+		cmocka_unit_test_setup_teardown(test_c_module_loads, setup_core, teardown_core), cmocka_unit_test_setup_teardown(test_c_registry_find_missing, setup_core, teardown_core), cmocka_unit_test_setup_teardown(test_c_alias, setup_core, teardown_core), cmocka_unit_test_setup_teardown(test_c_type_defaults_checks_arguments, setup_core, teardown_core), cmocka_unit_test_setup_teardown(test_c_load_modules_checks_arguments, setup_core, teardown_core), cmocka_unit_test_teardown(test_c_module_unload_on_last_release, remove_markers),
 	};
 	return cmocka_run_group_tests(tests, NULL, NULL);
 }

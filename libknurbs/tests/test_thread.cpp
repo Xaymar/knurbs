@@ -25,38 +25,40 @@ using knurbs::thread::task_queue;
 
 namespace {
 
-// Records whether its destructor ran on the queue thread.
-class probe final : public deferred_object {
-	ref<task_queue> queue_;
-	std::atomic<int> &result_;
+	// Records whether its destructor ran on the queue thread.
+	class probe final : public deferred_object {
+		ref<task_queue>   queue_;
+		std::atomic<int>& result_;
 
-public:
-	probe(ref<task_queue> q, std::atomic<int> &result) : deferred_object(q), queue_(std::move(q)), result_(result)
-	{
-	}
+		public:
+		probe(ref<task_queue> q, std::atomic<int>& result) : deferred_object(q), queue_(std::move(q)), result_(result) {}
 
-protected:
-	~probe() override { result_.store(queue_->on_queue_thread() ? 1 : 2); }
-};
-
-// Waits up to five seconds for `done`.
-template<class F> bool wait_for(F done)
-{
-	auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-	while (!done()) {
-		if (std::chrono::steady_clock::now() > deadline) {
-			return false;
+		protected:
+		~probe() override
+		{
+			result_.store(queue_->on_queue_thread() ? 1 : 2);
 		}
-		std::this_thread::yield();
+	};
+
+	// Waits up to five seconds for `done`.
+	template<class F>
+	bool wait_for(F done)
+	{
+		auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (!done()) {
+			if (std::chrono::steady_clock::now() > deadline) {
+				return false;
+			}
+			std::this_thread::yield();
+		}
+		return true;
 	}
-	return true;
-}
 
 } // namespace
 
-static void test_fifo_order(void **)
+static void test_fifo_order(void**)
 {
-	ref<task_queue> q = task_queue::create("q", logger::create());
+	ref<task_queue>  q = task_queue::create("q", logger::create());
 	std::vector<int> order;
 	for (int i = 0; i < 1000; ++i) {
 		q->post([&order, i] { order.push_back(i); });
@@ -68,18 +70,18 @@ static void test_fifo_order(void **)
 	}
 }
 
-static void test_task_exception_is_logged(void **)
+static void test_task_exception_is_logged(void**)
 {
-	ref<logger> log = logger::create();
-	std::mutex mutex;
+	ref<logger>                                log = logger::create();
+	std::mutex                                 mutex;
 	std::vector<std::pair<level, std::string>> got;
 	log->add_sink([&](level l, std::string_view text) noexcept {
 		std::lock_guard lock(mutex);
 		got.emplace_back(l, std::string(text));
 	});
 
-	ref<task_queue> q = task_queue::create("q", log);
-	bool next_ran = false;
+	ref<task_queue> q        = task_queue::create("q", log);
+	bool            next_ran = false;
 	q->post([] { throw std::runtime_error("boom"); });
 	q->post([&] { next_ran = true; });
 	q->flush();
@@ -91,23 +93,23 @@ static void test_task_exception_is_logged(void **)
 	assert_string_equal(got[0].second.c_str(), "q: task threw: boom");
 }
 
-static void test_post_after_stop_throws(void **)
+static void test_post_after_stop_throws(void**)
 {
-	ref<task_queue> q = task_queue::create("q", logger::create());
-	bool ran = false;
+	ref<task_queue> q   = task_queue::create("q", logger::create());
+	bool            ran = false;
 	q->post([&] { ran = true; });
 	q->stop();
 	assert_true(ran); // stop() runs what is queued
 	KNURBS_ASSERT_THROWS(q->post([] {}), knurbs::error::core_gone);
 	q->flush(); // nothing left: returns at once
-	q->stop();  // a second stop is harmless
+	q->stop(); // a second stop is harmless
 }
 
-static void test_flush_on_queue_thread_runs_inline(void **)
+static void test_flush_on_queue_thread_runs_inline(void**)
 {
-	ref<task_queue> q = task_queue::create("q", logger::create());
+	ref<task_queue>  q = task_queue::create("q", logger::create());
 	std::vector<int> order;
-	bool inside = false;
+	bool             inside = false;
 	// Holds the queue until both tasks below are posted.
 	std::atomic<bool> gate{false};
 	q->post([&] {
@@ -129,11 +131,11 @@ static void test_flush_on_queue_thread_runs_inline(void **)
 	assert_true(order == (std::vector<int>{1, 2, 3}));
 }
 
-static void test_flush_from_many_threads(void **)
+static void test_flush_from_many_threads(void**)
 {
-	ref<task_queue> q = task_queue::create("q", logger::create());
-	std::atomic<int> count{0};
-	std::atomic<int> missed{0};
+	ref<task_queue>          q = task_queue::create("q", logger::create());
+	std::atomic<int>         count{0};
+	std::atomic<int>         missed{0};
 	std::vector<std::thread> threads;
 	for (int t = 0; t < 4; ++t) {
 		threads.emplace_back([&] {
@@ -150,16 +152,16 @@ static void test_flush_from_many_threads(void **)
 			}
 		});
 	}
-	for (auto &t : threads) {
+	for (auto& t : threads) {
 		t.join();
 	}
 	assert_int_equal(missed.load(), 0);
 	assert_int_equal(count.load(), 400);
 }
 
-static void test_deferred_destroy_runs_on_queue(void **)
+static void test_deferred_destroy_runs_on_queue(void**)
 {
-	ref<task_queue> q = task_queue::create("q", logger::create());
+	ref<task_queue>  q = task_queue::create("q", logger::create());
 	std::atomic<int> result{0};
 	{
 		auto p = knurbs::make<probe>(q, result);
@@ -176,15 +178,15 @@ static void test_deferred_destroy_runs_on_queue(void **)
 	assert_int_equal(result.load(), 2);
 }
 
-static void test_queue_released_from_own_task(void **)
+static void test_queue_released_from_own_task(void**)
 {
-	ref<logger> log = logger::create();
-	weak<logger> log_alive(log);
+	ref<logger>     log = logger::create();
+	weak<logger>    log_alive(log);
 	ref<task_queue> q = task_queue::create("q", log);
 	log.reset();
 
 	std::atomic<bool> ran{false};
-	task_queue *raw = q.get();
+	task_queue*       raw = q.get();
 	raw->post([&ran, mine = std::move(q)]() mutable {
 		mine.reset(); // the last reference to the queue, dropped on its own thread
 		ran.store(true);
@@ -194,14 +196,14 @@ static void test_queue_released_from_own_task(void **)
 	assert_true(ran.load());
 }
 
-static void test_queue_released_by_deferred_object(void **)
+static void test_queue_released_by_deferred_object(void**)
 {
-	ref<logger> log = logger::create();
-	weak<logger> log_alive(log);
+	ref<logger>      log = logger::create();
+	weak<logger>     log_alive(log);
 	std::atomic<int> result{0};
 	{
 		ref<task_queue> q = task_queue::create("q", log);
-		auto p = knurbs::make<probe>(q, result);
+		auto            p = knurbs::make<probe>(q, result);
 		q.reset();
 		p.reset(); // its destructor drops the last queue reference, on the queue thread
 	}
@@ -210,7 +212,7 @@ static void test_queue_released_by_deferred_object(void **)
 	assert_int_equal(result.load(), 1);
 }
 
-static void test_set_current_name(void **)
+static void test_set_current_name(void**)
 {
 	std::string long_name, short_name;
 	std::thread t([&] {
@@ -237,15 +239,7 @@ static void test_set_current_name(void **)
 int main()
 {
 	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_fifo_order),
-		cmocka_unit_test(test_task_exception_is_logged),
-		cmocka_unit_test(test_post_after_stop_throws),
-		cmocka_unit_test(test_flush_on_queue_thread_runs_inline),
-		cmocka_unit_test(test_flush_from_many_threads),
-		cmocka_unit_test(test_deferred_destroy_runs_on_queue),
-		cmocka_unit_test(test_queue_released_from_own_task),
-		cmocka_unit_test(test_queue_released_by_deferred_object),
-		cmocka_unit_test(test_set_current_name),
+		cmocka_unit_test(test_fifo_order), cmocka_unit_test(test_task_exception_is_logged), cmocka_unit_test(test_post_after_stop_throws), cmocka_unit_test(test_flush_on_queue_thread_runs_inline), cmocka_unit_test(test_flush_from_many_threads), cmocka_unit_test(test_deferred_destroy_runs_on_queue), cmocka_unit_test(test_queue_released_from_own_task), cmocka_unit_test(test_queue_released_by_deferred_object), cmocka_unit_test(test_set_current_name),
 	};
 	return cmocka_run_group_tests(tests, nullptr, nullptr);
 }

@@ -9,8 +9,7 @@
 
 using namespace knurbs;
 
-#define KNURBS_CHECK_CODE(c_name, cpp_name) \
-	static_assert(static_cast<int>(c_name) == static_cast<int>(error::code::cpp_name))
+#define KNURBS_CHECK_CODE(c_name, cpp_name) static_assert(static_cast<int>(c_name) == static_cast<int>(error::code::cpp_name))
 
 KNURBS_CHECK_CODE(KNURBS_OK, ok);
 KNURBS_CHECK_CODE(KNURBS_ERROR_UNKNOWN, unknown);
@@ -29,49 +28,49 @@ KNURBS_CHECK_CODE(KNURBS_ERROR_VERSION_MISMATCH, version_mismatch);
 
 extern "C" {
 
-const char *knurbs_last_error(void)
+const char* knurbs_last_error(void)
 {
 	return detail::c_last_error().c_str();
 }
 
-void knurbs_ref(knurbs_object_t *object)
+void knurbs_ref(knurbs_object_t* object)
 {
 	if (object) {
 		detail::c_from_handle(object)->acquire();
 	}
 }
 
-void knurbs_release(knurbs_object_t *object)
+void knurbs_release(knurbs_object_t* object)
 {
 	if (object) {
 		detail::c_from_handle(object)->release();
 	}
 }
 
-void knurbs_free(void *memory)
+void knurbs_free(void* memory)
 {
 	std::free(memory);
 }
 
-knurbs_weak_t *knurbs_weak_get(knurbs_object_t *object)
+knurbs_weak_t* knurbs_weak_get(knurbs_object_t* object)
 {
-	knurbs_weak_t *result = nullptr;
+	knurbs_weak_t* result = nullptr;
 	detail::c_guard([&] {
-		detail::weak_block *w = detail::weak_get(detail::c_from_handle(object));
-		result = static_cast<knurbs_weak_t *>(static_cast<void *>(w));
+		detail::weak_block* w = detail::weak_get(detail::c_from_handle(object));
+		result                = static_cast<knurbs_weak_t*>(static_cast<void*>(w));
 	});
 	return result;
 }
 
-knurbs_object_t *knurbs_weak_lock(knurbs_weak_t *weak)
+knurbs_object_t* knurbs_weak_lock(knurbs_weak_t* weak)
 {
-	auto *w = static_cast<detail::weak_block *>(static_cast<void *>(weak));
+	auto* w = static_cast<detail::weak_block*>(static_cast<void*>(weak));
 	return detail::c_to_handle(detail::weak_lock(w));
 }
 
-void knurbs_weak_release(knurbs_weak_t *weak)
+void knurbs_weak_release(knurbs_weak_t* weak)
 {
-	detail::weak_release(static_cast<detail::weak_block *>(static_cast<void *>(weak)));
+	detail::weak_release(static_cast<detail::weak_block*>(static_cast<void*>(weak)));
 }
 
 } // extern "C"

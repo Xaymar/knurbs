@@ -14,56 +14,50 @@ using knurbs::weak;
 
 namespace {
 
-struct probe : knurbs::object {
-	enum class during_destroy { nothing, try_acquire, weak_get };
+	struct probe : knurbs::object {
+		enum class during_destroy { nothing, try_acquire, weak_get };
 
-	std::atomic<bool> *destroyed;
-	during_destroy action;
-	bool *result;
+		std::atomic<bool>* destroyed;
+		during_destroy     action;
+		bool*              result;
 
-	explicit probe(std::atomic<bool> *destroyed_flag = nullptr, during_destroy what = during_destroy::nothing,
-		       bool *what_result = nullptr) noexcept
-		: destroyed(destroyed_flag),
-		  action(what),
-		  result(what_result)
-	{
-	}
+		explicit probe(std::atomic<bool>* destroyed_flag = nullptr, during_destroy what = during_destroy::nothing, bool* what_result = nullptr) noexcept : destroyed(destroyed_flag), action(what), result(what_result) {}
 
-	~probe() override
-	{
-		if (destroyed) {
-			destroyed->store(true);
+		~probe() override
+		{
+			if (destroyed) {
+				destroyed->store(true);
+			}
 		}
-	}
 
-protected:
-	void destroy() noexcept override
-	{
-		// The count is already 0 here and the object is not yet deleted.
-		if (action == during_destroy::try_acquire) {
-			*result = try_acquire();
-		} else if (action == during_destroy::weak_get) {
-			knurbs::detail::weak_block *w = knurbs::detail::weak_get(this);
-			*result = knurbs::detail::weak_expired(w) && knurbs::detail::weak_lock(w) == nullptr;
-			knurbs::detail::weak_release(w);
+		protected:
+		void destroy() noexcept override
+		{
+			// The count is already 0 here and the object is not yet deleted.
+			if (action == during_destroy::try_acquire) {
+				*result = try_acquire();
+			} else if (action == during_destroy::weak_get) {
+				knurbs::detail::weak_block* w = knurbs::detail::weak_get(this);
+				*result                       = knurbs::detail::weak_expired(w) && knurbs::detail::weak_lock(w) == nullptr;
+				knurbs::detail::weak_release(w);
+			}
+			object::destroy();
 		}
-		object::destroy();
-	}
-};
+	};
 
 } // namespace
 
-static void test_count_starts_at_one(void **)
+static void test_count_starts_at_one(void**)
 {
 	auto r = make<probe>();
 	assert_int_equal(r->use_count(), 1);
 }
 
-static void test_last_release_destroys(void **)
+static void test_last_release_destroys(void**)
 {
 	std::atomic<bool> destroyed{false};
-	auto r = make<probe>(&destroyed);
-	auto copy = r;
+	auto              r    = make<probe>(&destroyed);
+	auto              copy = r;
 	assert_int_equal(r->use_count(), 2);
 	copy.reset();
 	assert_false(destroyed.load());
@@ -73,11 +67,11 @@ static void test_last_release_destroys(void **)
 	assert_null(r.get());
 }
 
-static void test_try_acquire_fails_at_zero(void **)
+static void test_try_acquire_fails_at_zero(void**)
 {
 	std::atomic<bool> destroyed{false};
-	bool acquired = true;
-	auto r = make<probe>(&destroyed, probe::during_destroy::try_acquire, &acquired);
+	bool              acquired = true;
+	auto              r        = make<probe>(&destroyed, probe::during_destroy::try_acquire, &acquired);
 	assert_true(r->try_acquire());
 	assert_int_equal(r->use_count(), 2);
 	r->release();
@@ -86,11 +80,11 @@ static void test_try_acquire_fails_at_zero(void **)
 	assert_false(acquired);
 }
 
-static void test_weak_lock_alive_and_expired(void **)
+static void test_weak_lock_alive_and_expired(void**)
 {
 	std::atomic<bool> destroyed{false};
-	auto r = make<probe>(&destroyed);
-	weak<probe> w(r);
+	auto              r = make<probe>(&destroyed);
+	weak<probe>       w(r);
 	assert_false(w.expired());
 	{
 		ref<probe> locked = w.lock();
@@ -99,7 +93,7 @@ static void test_weak_lock_alive_and_expired(void **)
 	}
 	assert_int_equal(r->use_count(), 1);
 
-	weak<probe> copy = w;
+	weak<probe> copy  = w;
 	weak<probe> moved = std::move(copy);
 	assert_true(copy.expired()); // moved-from weak is empty
 	assert_false(moved.expired());
@@ -112,34 +106,34 @@ static void test_weak_lock_alive_and_expired(void **)
 	assert_false(static_cast<bool>(moved.lock()));
 }
 
-static void test_weak_requested_during_destroy(void **)
+static void test_weak_requested_during_destroy(void**)
 {
 	std::atomic<bool> destroyed{false};
-	bool expired = false;
-	auto r = make<probe>(&destroyed, probe::during_destroy::weak_get, &expired);
+	bool              expired = false;
+	auto              r       = make<probe>(&destroyed, probe::during_destroy::weak_get, &expired);
 	r.reset();
 	assert_true(destroyed.load());
 	assert_true(expired);
 }
 
-static void test_weak_requested_during_destroy_existing_block(void **)
+static void test_weak_requested_during_destroy_existing_block(void**)
 {
 	// Same as above, but a weak block already exists before the last release.
 	std::atomic<bool> destroyed{false};
-	bool expired = false;
-	auto r = make<probe>(&destroyed, probe::during_destroy::weak_get, &expired);
-	weak<probe> w(r);
+	bool              expired = false;
+	auto              r       = make<probe>(&destroyed, probe::during_destroy::weak_get, &expired);
+	weak<probe>       w(r);
 	r.reset();
 	assert_true(destroyed.load());
 	assert_true(expired);
 	assert_true(w.expired());
 }
 
-static void test_detach_adopt_roundtrip(void **)
+static void test_detach_adopt_roundtrip(void**)
 {
 	std::atomic<bool> destroyed{false};
-	auto r = make<probe>(&destroyed);
-	probe *p = r.detach();
+	auto              r = make<probe>(&destroyed);
+	probe*            p = r.detach();
 	assert_null(r.get());
 	auto r2 = ref<probe>::adopt(p);
 	assert_ptr_equal(r2.get(), p);
@@ -148,11 +142,11 @@ static void test_detach_adopt_roundtrip(void **)
 	assert_true(destroyed.load());
 }
 
-static void test_retain_and_conversion(void **)
+static void test_retain_and_conversion(void**)
 {
 	std::atomic<bool> destroyed{false};
-	auto r = make<probe>(&destroyed);
-	auto retained = ref<probe>::retain(r.get());
+	auto              r        = make<probe>(&destroyed);
+	auto              retained = ref<probe>::retain(r.get());
 	assert_int_equal(r->use_count(), 2);
 
 	ref<knurbs::object> base = retained;
@@ -169,18 +163,18 @@ static void test_retain_and_conversion(void **)
 	assert_true(destroyed.load());
 }
 
-static void test_upgrade_vs_release_stress(void **)
+static void test_upgrade_vs_release_stress(void**)
 {
-	constexpr int threads = 8;
+	constexpr int threads    = 8;
 	constexpr int iterations = 10000;
-	constexpr int max_locks = 64;
+	constexpr int max_locks  = 64;
 
 	std::atomic<bool> destroyed{false};
-	weak<probe> shared;
+	weak<probe>       shared;
 	std::atomic<long> violations{0};
 	std::atomic<long> upgrades{0};
 	std::atomic<bool> stop{false};
-	std::barrier sync(threads + 1);
+	std::barrier      sync(threads + 1);
 
 	std::vector<std::jthread> workers;
 	for (int t = 0; t < threads; ++t) {
@@ -192,8 +186,8 @@ static void test_upgrade_vs_release_stress(void **)
 				}
 				// Bounded, or overlapping locks from the workers could keep the count above 0 forever.
 				for (int attempt = 0; attempt < max_locks; ++attempt) {
-					bool dead_before = destroyed.load();
-					ref<probe> s = shared.lock();
+					bool       dead_before = destroyed.load();
+					ref<probe> s           = shared.lock();
 					if (!s) {
 						break;
 					}
@@ -233,15 +227,7 @@ static void test_upgrade_vs_release_stress(void **)
 int main()
 {
 	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_count_starts_at_one),
-		cmocka_unit_test(test_last_release_destroys),
-		cmocka_unit_test(test_try_acquire_fails_at_zero),
-		cmocka_unit_test(test_weak_lock_alive_and_expired),
-		cmocka_unit_test(test_weak_requested_during_destroy),
-		cmocka_unit_test(test_weak_requested_during_destroy_existing_block),
-		cmocka_unit_test(test_detach_adopt_roundtrip),
-		cmocka_unit_test(test_retain_and_conversion),
-		cmocka_unit_test(test_upgrade_vs_release_stress),
+		cmocka_unit_test(test_count_starts_at_one), cmocka_unit_test(test_last_release_destroys), cmocka_unit_test(test_try_acquire_fails_at_zero), cmocka_unit_test(test_weak_lock_alive_and_expired), cmocka_unit_test(test_weak_requested_during_destroy), cmocka_unit_test(test_weak_requested_during_destroy_existing_block), cmocka_unit_test(test_detach_adopt_roundtrip), cmocka_unit_test(test_retain_and_conversion), cmocka_unit_test(test_upgrade_vs_release_stress),
 	};
 	return cmocka_run_group_tests(tests, nullptr, nullptr);
 }

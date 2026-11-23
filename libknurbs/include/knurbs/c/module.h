@@ -68,7 +68,7 @@ typedef struct knurbs_module knurbs_module_t;
  * last knurbs_release started, when the core has no references left (see knurbs_ref). To keep the core, take the
  * reference earlier, in load or post_load, and drop it again by unload at the latest (a reference still held then
  * keeps the core from ever being destroyed). */
-KNURBS_C_API knurbs_core_t *knurbs_module_core(knurbs_module_t *module);
+KNURBS_C_API knurbs_core_t* knurbs_module_core(knurbs_module_t* module);
 
 #ifdef __cplusplus
 }
@@ -77,15 +77,15 @@ KNURBS_C_API knurbs_core_t *knurbs_module_core(knurbs_module_t *module);
 /* Defines the knurbs_module_header of a C module, for the version of the headers it is compiled against. Use it
  * once, at file scope, in one source file of the module (C++ modules use KNURBS_MODULE_CPP from knurbs/module.hpp).
  */
-#define KNURBS_MODULE_C()                                                                             \
-	KNURBS_MODULE_EXPORT const struct knurbs_module_header *knurbs_module_header(void);           \
-	KNURBS_MODULE_EXPORT const struct knurbs_module_header *knurbs_module_header(void)            \
-	{                                                                                             \
-		static const struct knurbs_module_header knurbs_header = {                            \
-			sizeof(struct knurbs_module_header),                                          \
-			KNURBS_MODULE_API_C,                                                          \
-			KNURBS_API_VERSION_MAJOR,                                                     \
-			KNURBS_API_VERSION_MINOR,                                                     \
-		};                                                                                    \
-		return &knurbs_header;                                                                \
+#define KNURBS_MODULE_C()                                                               \
+	KNURBS_MODULE_EXPORT const struct knurbs_module_header* knurbs_module_header(void); \
+	KNURBS_MODULE_EXPORT const struct knurbs_module_header* knurbs_module_header(void)  \
+	{                                                                                   \
+		static const struct knurbs_module_header knurbs_header = {                      \
+			sizeof(struct knurbs_module_header),                                        \
+			KNURBS_MODULE_API_C,                                                        \
+			KNURBS_API_VERSION_MAJOR,                                                   \
+			KNURBS_API_VERSION_MINOR,                                                   \
+		};                                                                              \
+		return &knurbs_header;                                                          \
 	}
