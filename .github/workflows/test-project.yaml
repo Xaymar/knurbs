@@ -5,6 +5,8 @@ jobs:
   ubuntu:
     name: Ubuntu 🐧
     runs-on: ubuntu-26.04
+    # A hung test must fail the job, not hold the runner for six hours
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
@@ -60,11 +62,13 @@ jobs:
       - name: Run Unit Tests 🧪
         run: |
           : Run Unit Tests 🧪
-          xvfb-run -a ctest --test-dir build_ubuntu --output-on-failure
+          xvfb-run -a ctest --test-dir build_ubuntu --output-on-failure --timeout 600
 
   windows:
     name: Windows 🪟
     runs-on: windows-2025-vs2026
+    # A hung test must fail the job, not hold the runner for six hours
+    timeout-minutes: 120
     defaults:
       run:
         shell: pwsh
@@ -108,5 +112,5 @@ jobs:
       - name: Run Unit Tests 🧪
         run: |
           # Run Unit Tests 🧪
-          ctest --test-dir build_x64 -C RelWithDebInfo --output-on-failure
+          ctest --test-dir build_x64 -C RelWithDebInfo --output-on-failure --timeout 600
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
