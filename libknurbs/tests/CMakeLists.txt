@@ -58,3 +58,7 @@ knurbs_add_test(test_platform)
 knurbs_add_test(test_naming)
 knurbs_add_test(test_core)
 knurbs_add_test(test_data)
+knurbs_add_test(test_properties)
+knurbs_add_test(test_locale)
+# The test data is addressed by absolute path, not relative to the working directory
+target_compile_definitions(test_locale PRIVATE KNURBS_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")

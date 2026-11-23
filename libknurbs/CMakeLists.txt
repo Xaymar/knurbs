@@ -29,10 +29,12 @@ target_sources(
     source/data-impl.hpp
     source/data.cpp
     source/error.cpp
+    source/locale.cpp
     source/log.cpp
     source/naming.cpp
     source/object.cpp
     source/platform.cpp
+    source/properties.cpp
     source/thread.cpp
     source/version.cpp
 )
