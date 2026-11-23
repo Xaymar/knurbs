@@ -63,6 +63,6 @@ indent_style = space
 indent_size = 4
 
 # New Knurbs code uses the Knurbs style (4-wide tabs); see libknurbs/.clang-format.
-[{libknurbs,knurbs-frontend}/**.{c,cpp,h,hpp,m,mm}]
+[{libknurbs,knurbs-frontend,plugins/knurbs-*}/**.{c,cpp,h,hpp,m,mm}]
 indent_style = tab
 indent_size = 4

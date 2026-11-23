@@ -50,9 +50,10 @@ settings.
 ## Code style
 
 Code style is defined by formatter configurations. New Knurbs code
-(`libknurbs/`, `knurbs-frontend/`) uses the Knurbs style in the `.clang-format`
-inside those directories, derived from StreamFX: 4-wide tabs, left-aligned
-pointers (`int* p`), indented namespaces and aligned declarations. Code inherited
+(`libknurbs/`, `knurbs-frontend/`, `plugins/knurbs-*/`) uses the Knurbs style,
+derived from StreamFX: 4-wide tabs, left-aligned pointers (`int* p`), indented
+namespaces and aligned declarations. It lives in a `.clang-format` inside each
+of those directories; a new `knurbs-*` plugin copies it. Code inherited
 from OBS Studio keeps the root `.clang-format`, so upstream fixes still merge
 cleanly. `.swift-format` covers Swift and `.gersemirc` covers CMake.
 
