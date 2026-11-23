@@ -283,6 +283,14 @@ if(ENABLE_VULKAN)
   target_link_libraries(test_vulkan_nv12 PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
   add_test(test_vulkan_nv12 test_vulkan_nv12)
 
+  # Probe (pure Vulkan, every device): may a compute shader write the planes of NV12/P010/4:2:2 images through
+  # per-plane storage views? Logs the answer per format; skips without a loader.
+  add_executable(test_vulkan_yuv_storage test_vulkan_yuv_storage.cpp)
+  target_include_directories(test_vulkan_yuv_storage PRIVATE ${CMOCKA_INCLUDE_DIR})
+  target_compile_features(test_vulkan_yuv_storage PRIVATE cxx_std_17)
+  target_link_libraries(test_vulkan_yuv_storage PRIVATE Vulkan::Vulkan cmocka::cmocka)
+  add_test(NAME test_vulkan_yuv_storage COMMAND test_vulkan_yuv_storage)
+
   if(OS_WINDOWS)
     # External memory and sync (D3D11 import, keyed mutex, export/import across devices and processes); needs a
     # device (skips without one).
