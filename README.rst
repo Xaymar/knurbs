@@ -3,9 +3,9 @@ Knurbs
 
 Knurbs is a fork of `OBS Studio <https://github.com/obsproject/obs-studio>`_
 for capturing, compositing, encoding, recording and streaming video. It aims
-to be the most stable and fastest way to stream and record, with a minimal
-set of features that work on every supported platform. It focuses on three
-things:
+to be the most stable and fastest way to stream and record, with a minimum
+set of features that is guaranteed to work on every supported platform. It
+focuses on three things:
 
 - **Stability**: fix the common pitfalls in how libobs works, and back every
   fix with a regression test. Development is test and coverage driven, so
