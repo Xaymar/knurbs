@@ -49,10 +49,18 @@ settings.
 
 ## Code style
 
-Code style is defined by the formatter configurations in the repository root:
-`.clang-format` for C, C++, Objective-C and Objective-C++, `.swift-format` for
-Swift and `.gersemirc` for CMake. Run the matching formatter before you commit;
-the scripts in `build-aux` do that for you, and CI checks it.
+Code style is defined by formatter configurations. New Knurbs code
+(`libknurbs/`, `knurbs-frontend/`, `plugins/knurbs-*/`) uses the Knurbs style,
+derived from StreamFX: 4-wide tabs, left-aligned pointers (`int* p`), indented
+namespaces and aligned declarations. It lives in a `.clang-format` inside each
+of those directories; a new `knurbs-*` plugin copies it. Code inherited
+from OBS Studio keeps the root `.clang-format`, so upstream fixes still merge
+cleanly. `.swift-format` covers Swift and `.gersemirc` covers CMake.
+
+Formatting is a convenience, not a requirement: CI does not check it, and a pull
+request is never rejected over style. Run the formatter if you like; the
+scripts in `build-aux` do that for you. Do not reformat code you are not
+otherwise changing.
 
 ## Commits
 

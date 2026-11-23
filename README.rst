@@ -92,8 +92,8 @@ Contributing
 
 Issues and pull requests go to
 `Xaymar/knurbs <https://github.com/Xaymar/knurbs>`_, against the ``root``
-branch. Code style is defined by ``.clang-format``, ``.swift-format`` and
-``.gersemirc``; see ``CONTRIBUTING.md``. Bug fixes come in their own commit
+branch. Formatter configurations are provided for convenience and are not
+enforced; see ``CONTRIBUTING.md``. Bug fixes come in their own commit
 with a regression test.
 
 Knurbs is an AI assisted project and welcomes contributions made with AI
