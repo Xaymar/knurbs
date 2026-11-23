@@ -31,13 +31,11 @@ target_sources(
     cuda-helpers.h
     knurbs-nvenc.c
     knurbs-nvenc.h
-    nvenc-aliases.c
     nvenc-cuda.c
     nvenc-helpers.c
     nvenc-helpers.h
     nvenc-internal.h
-    nvenc-migrate.c
-    nvenc-migrate.h
+    nvenc-ids.h
     nvenc-opts-parser.c
     nvenc-properties.c
     nvenc.c

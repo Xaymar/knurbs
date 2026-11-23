@@ -381,7 +381,6 @@ void obs_nvenc_load(void)
 {
 	pthread_mutex_init(&init_mutex, NULL);
 	register_encoders();
-	register_encoder_aliases();
 }
 
 void obs_nvenc_unload(void)
