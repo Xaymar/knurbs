@@ -281,9 +281,12 @@ jobs:
           # Same dependency setup that .github/scripts/build-ubuntu runs (apt packages, VST3 SDK, CEF into .deps).
           install_dependencies() {
             local project_root=${GITHUB_WORKSPACE}
+            local SCRIPT_HOME=${project_root}/.github/scripts
             local target=ubuntu-x86_64
-            fpath=(${project_root}/.github/scripts/utils.zsh ${fpath})
-            autoload -Uz setup_ubuntu
+            fpath=(${SCRIPT_HOME}/utils.zsh ${fpath})
+            autoload -Uz log_group log_error check_ubuntu setup_ubuntu
+            # check_ubuntu runs apt-get update and installs the .Aptfile tools (cmake, ninja, jq, ...)
+            check_ubuntu
             setup_ubuntu
           }
           install_dependencies
@@ -292,7 +295,7 @@ jobs:
       - name: Configure 🔧
         run: |
           : Configure 🔧
-          cmake --preset ubuntu-ci \
+          /usr/bin/cmake --preset ubuntu-ci \
             -DENABLE_UNIT_TESTS=ON \
             -DENABLE_FRONTEND=OFF \
             -DENABLE_BROWSER=OFF \
@@ -302,7 +305,7 @@ jobs:
       - name: Build Unit Tests 🧱
         run: |
           : Build Unit Tests 🧱
-          cmake --build build_ubuntu --target obs-unit-tests --parallel
+          /usr/bin/cmake --build build_ubuntu --target obs-unit-tests --parallel
 
       - name: Run Unit Tests 🧪
         run: |
@@ -503,12 +506,14 @@ jobs:
           # Same winget setup that .github/scripts/Build-Windows.ps1 runs. obs-deps is downloaded by CMake
           # during configure, as it is for the regular build.
           $ErrorActionPreference = 'Stop'
+          $OriginalPath = $Env:Path -split ';'
           foreach ($Utility in Get-ChildItem -Path .github/scripts/utils.pwsh/*.ps1 -Recurse) {
             . $Utility.FullName
           }
           Install-BuildDependencies -WingetFile .github/scripts/.Wingetfile
-          # Keep the PATH that Install-BuildDependencies built up for the following steps.
-          Add-Content -Path $Env:GITHUB_PATH -Value ($Env:Path -split ';')
+          # Keep only the PATH entries that Install-BuildDependencies added for the following steps.
+          $Added = ($Env:Path -split ';') | Where-Object { $_ -and ($OriginalPath -notcontains $_) }
+          if ($Added) { Add-Content -Path $Env:GITHUB_PATH -Value $Added }
 
       - name: Configure 🔧
         run: |
