@@ -1,5 +1,8 @@
 #include "winrt-capture.h"
 
+#include <d3d11_1.h>
+#include <dxgi1_4.h>
+
 extern "C" EXPORT BOOL winrt_capture_supported()
 try {
 	/* no contract for IGraphicsCaptureItemInterop, verify 10.0.18362.0 */
@@ -76,6 +79,16 @@ static bool get_client_box(HWND window, uint32_t width, uint32_t height, D3D11_B
 	return client_box_available;
 }
 
+/* Test hook: OBS_WINRT_TEST_HDR=1 captures as if every monitor were HDR (RGBA16F frames, scRGB). */
+static bool test_force_hdr()
+{
+	static const bool force = [] {
+		const char *v = getenv("OBS_WINRT_TEST_HDR");
+		return v && !strcmp(v, "1");
+	}();
+	return force;
+}
+
 static DXGI_FORMAT get_pixel_format(HWND window, HMONITOR monitor, BOOL force_sdr)
 {
 	static constexpr DXGI_FORMAT sdr_format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -84,11 +97,258 @@ static DXGI_FORMAT get_pixel_format(HWND window, HMONITOR monitor, BOOL force_sd
 		return sdr_format;
 	}
 
+	if (test_force_hdr()) {
+		return DXGI_FORMAT_R16G16B16A16_FLOAT;
+	}
+
 	if (window) {
 		monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
 	}
 
 	return (monitor && gs_is_monitor_hdr(monitor)) ? DXGI_FORMAT_R16G16B16A16_FLOAT : sdr_format;
+}
+
+/* ---- Vulkan renderer --------------------------------------------------------------------------------------------
+ * WGC delivers frames to a D3D11 device only. On Vulkan there is none in the process, so captures share a private
+ * D3D11 device on the renderer's adapter (by LUID). Each capture copies a frame into one of three D3D11 textures
+ * (NT handle, keyed mutex) imported once into Vulkan: one copy per frame, as on D3D11.
+ *
+ * Everything runs on the graphics thread (WGC frames arrive through its dispatcher queue, see winrt-dispatch.cpp),
+ * so the slot state needs no lock. Key 0 is used both ways; ownership is decided by that state:
+ * - Vulkan holds the slot it draws (`current`) from the first draw after it was written until a newer one is drawn,
+ *   so a static window costs no keyed-mutex work per frame.
+ * - A frame is written to a slot other than `current`, round robin. Vulkan submits the release of a slot as soon as
+ *   it stops drawing it (gs_texture_release_sync), so D3D11 waits at most for the GPU to reach that release. */
+
+static constexpr int vk_slot_count = 3;
+static constexpr DWORD vk_d3d11_acquire_ms = 500;
+
+struct vk_bridge {
+	ComPtr<ID3D11Device> device;
+	ComPtr<ID3D11DeviceContext> context;
+	winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice winrt_device{nullptr};
+	LUID luid{};
+	long refs = 0;
+};
+
+static vk_bridge *bridge;
+
+static bool renderer_is_vulkan()
+{
+	return gs_get_device_type() == GS_DEVICE_VULKAN;
+}
+
+static void bridge_reset()
+{
+	if (bridge) {
+		bridge->winrt_device = nullptr;
+		bridge->context = nullptr;
+		bridge->device = nullptr;
+	}
+}
+
+/* The private D3D11 device for the current Vulkan device's adapter; graphics context entered. */
+static bool bridge_create()
+{
+	gs_adapter_identity id = {};
+	if (!gs_get_adapter_identity(&id) || !id.luid_valid) {
+		blog(LOG_ERROR, "[winrt-capture] Vulkan: the renderer's adapter has no LUID");
+		return false;
+	}
+	LUID luid;
+	memcpy(&luid, id.luid, sizeof(luid));
+	if (!bridge) {
+		bridge = new vk_bridge;
+	}
+	if (bridge->device && !memcmp(&bridge->luid, &luid, sizeof(luid)) &&
+	    bridge->device->GetDeviceRemovedReason() == S_OK) {
+		return true;
+	}
+	bridge_reset();
+
+	ComPtr<IDXGIFactory4> factory;
+	ComPtr<IDXGIAdapter> adapter;
+	HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
+	if (SUCCEEDED(hr)) {
+		hr = factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter));
+	}
+	if (FAILED(hr)) {
+		blog(LOG_ERROR, "[winrt-capture] Vulkan: no DXGI adapter with the renderer's LUID (0x%08lX)",
+		     (unsigned long)hr);
+		return false;
+	}
+	static const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+	ComPtr<ID3D11Device> device;
+	ComPtr<ID3D11DeviceContext> context;
+	hr = D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+			       levels, _countof(levels), D3D11_SDK_VERSION, &device, nullptr, &context);
+	if (FAILED(hr)) {
+		blog(LOG_ERROR, "[winrt-capture] Vulkan: D3D11CreateDevice failed (0x%08lX)", (unsigned long)hr);
+		return false;
+	}
+	ComPtr<IDXGIDevice> dxgi_device;
+	winrt::com_ptr<IInspectable> inspectable;
+	if (FAILED(device->QueryInterface(&dxgi_device)) ||
+	    FAILED(CreateDirect3D11DeviceFromDXGIDevice(dxgi_device.Get(), inspectable.put()))) {
+		blog(LOG_ERROR, "[winrt-capture] Vulkan: failed to get WinRT device");
+		return false;
+	}
+	bridge->device = device;
+	bridge->context = context;
+	bridge->winrt_device = inspectable.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
+	bridge->luid = luid;
+	DXGI_ADAPTER_DESC ad;
+	if (SUCCEEDED(adapter->GetDesc(&ad))) {
+		blog(LOG_INFO, "[winrt-capture] Vulkan: capturing through a D3D11 device on %ls", ad.Description);
+	}
+	return true;
+}
+
+/* Whether the private device is alive and on the current Vulkan device's adapter; graphics context entered. */
+static bool bridge_current()
+{
+	gs_adapter_identity id = {};
+	return bridge && bridge->device && bridge->device->GetDeviceRemovedReason() == S_OK &&
+	       gs_get_adapter_identity(&id) && id.luid_valid && !memcmp(&bridge->luid, id.luid, sizeof(LUID));
+}
+
+static void bridge_release()
+{
+	if (bridge && --bridge->refs <= 0) {
+		delete bridge;
+		bridge = nullptr;
+	}
+}
+
+struct vk_slot {
+	ComPtr<ID3D11Texture2D> d3d;
+	ComPtr<IDXGIKeyedMutex> km;
+	HANDLE handle = nullptr;
+	gs_texture_t *tex = nullptr;
+};
+
+struct vk_slots {
+	vk_slot slot[vk_slot_count];
+	uint32_t width = 0, height = 0;
+	DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+	int current = -1; /* held by Vulkan, drawn */
+	int ready = -1;   /* newest frame */
+	int next = 0;
+};
+
+/* Graphics context entered. */
+static void slots_destroy(vk_slots &s)
+{
+	for (int i = 0; i < vk_slot_count; ++i) {
+		vk_slot &sl = s.slot[i];
+		if (sl.tex) {
+			if (i == s.current) {
+				gs_texture_release_sync(sl.tex, 0);
+			}
+			gs_texture_destroy(sl.tex);
+		}
+		if (sl.handle) {
+			CloseHandle(sl.handle);
+		}
+		sl = vk_slot{};
+	}
+	s.width = s.height = 0;
+	s.format = DXGI_FORMAT_UNKNOWN;
+	s.current = s.ready = -1;
+	s.next = 0;
+}
+
+static bool slots_create(vk_slots &s, uint32_t width, uint32_t height, DXGI_FORMAT format)
+{
+	slots_destroy(s);
+	blog(LOG_DEBUG, "[winrt-capture] Vulkan: shared textures %ux%u, format %d", width, height, (int)format);
+	for (vk_slot &sl : s.slot) {
+		D3D11_TEXTURE2D_DESC td = {};
+		td.Width = width;
+		td.Height = height;
+		td.MipLevels = 1;
+		td.ArraySize = 1;
+		td.Format = format;
+		td.SampleDesc.Count = 1;
+		td.Usage = D3D11_USAGE_DEFAULT;
+		td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		td.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+		ComPtr<IDXGIResource1> res;
+		HRESULT hr = bridge->device->CreateTexture2D(&td, nullptr, &sl.d3d);
+		if (SUCCEEDED(hr)) {
+			hr = sl.d3d->QueryInterface(&sl.km);
+		}
+		if (SUCCEEDED(hr)) {
+			hr = sl.d3d->QueryInterface(&res);
+		}
+		if (SUCCEEDED(hr)) {
+			hr = res->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+						     nullptr, &sl.handle);
+		}
+		if (FAILED(hr)) {
+			blog(LOG_ERROR, "[winrt-capture] Vulkan: failed to create a shared %ux%u texture (0x%08lX)",
+			     width, height, (unsigned long)hr);
+			slots_destroy(s);
+			return false;
+		}
+		sl.tex = gs_texture_open_nt_shared((uint32_t)(uintptr_t)sl.handle);
+		if (!sl.tex) {
+			blog(LOG_ERROR, "[winrt-capture] Vulkan: failed to import the shared %ux%u texture", width,
+			     height);
+			slots_destroy(s);
+			return false;
+		}
+	}
+	s.width = width;
+	s.height = height;
+	s.format = format;
+	return true;
+}
+
+/* Copies a frame into a slot Vulkan does not hold. Graphics context entered. */
+static bool slots_write(vk_slots &s, ID3D11Texture2D *frame, const D3D11_BOX *box)
+{
+	int w = s.next % vk_slot_count;
+	if (w == s.current) {
+		w = (w + 1) % vk_slot_count;
+	}
+	vk_slot &sl = s.slot[w];
+	const HRESULT hr = sl.km->AcquireSync(0, vk_d3d11_acquire_ms);
+	if (hr != S_OK) {
+		blog(LOG_WARNING, "[winrt-capture] Vulkan: shared texture busy (0x%08lX), frame dropped",
+		     (unsigned long)hr);
+		return false;
+	}
+	if (box) {
+		bridge->context->CopySubresourceRegion(sl.d3d.Get(), 0, 0, 0, 0, frame, 0, box);
+	} else {
+		bridge->context->CopyResource(sl.d3d.Get(), frame);
+	}
+	sl.km->ReleaseSync(0);
+	bridge->context->Flush();
+	s.ready = w;
+	s.next = w + 1;
+	return true;
+}
+
+/* The texture to draw: makes Vulkan hold the newest frame's slot. Graphics context entered. */
+static gs_texture_t *slots_draw_texture(vk_slots &s)
+{
+	if (s.ready < 0) {
+		return nullptr;
+	}
+	if (s.ready != s.current) {
+		if (s.current >= 0) {
+			gs_texture_release_sync(s.slot[s.current].tex, 0);
+			s.current = -1;
+		}
+		if (gs_texture_acquire_sync(s.slot[s.ready].tex, 0, INFINITE) != 0) {
+			blog(LOG_ERROR, "[winrt-capture] Vulkan: keyed mutex acquire failed");
+			return nullptr;
+		}
+		s.current = s.ready;
+	}
+	return s.slot[s.current].tex;
 }
 
 struct winrt_capture {
@@ -119,10 +379,52 @@ struct winrt_capture {
 	BOOL active;
 	struct winrt_capture *next;
 
+	bool vulkan; /* renderer is Vulkan: frames go through `bridge` and `slots` */
+	vk_slots slots;
+
 	void on_closed(winrt::Windows::Graphics::Capture::GraphicsCaptureItem const &,
 		       winrt::Windows::Foundation::IInspectable const &)
 	{
 		active = FALSE;
+	}
+
+	void copy_frame_d3d11(ID3D11Texture2D *frame_surface, DXGI_FORMAT frame_format)
+	{
+		if (texture) {
+			if (texture_width != gs_texture_get_width(texture) ||
+			    texture_height != gs_texture_get_height(texture)) {
+				gs_texture_destroy(texture);
+				texture = nullptr;
+			}
+		}
+
+		if (!texture) {
+			const gs_color_format color_format = frame_format == DXGI_FORMAT_R16G16B16A16_FLOAT ? GS_RGBA16F
+													    : GS_BGRA;
+			texture = gs_texture_create(texture_width, texture_height, color_format, 1, NULL, 0);
+		}
+
+		if (client_area) {
+			context->CopySubresourceRegion((ID3D11Texture2D *)gs_texture_get_obj(texture), 0, 0, 0, 0,
+						       frame_surface, 0, &client_box);
+		} else {
+			/* if they gave an SRV, we could avoid this copy */
+			context->CopyResource((ID3D11Texture2D *)gs_texture_get_obj(texture), frame_surface);
+		}
+
+		texture_written = true;
+	}
+
+	void copy_frame_vulkan(ID3D11Texture2D *frame_surface, DXGI_FORMAT frame_format)
+	{
+		const bool same = slots.width == texture_width && slots.height == texture_height &&
+				  slots.format == frame_format;
+		if (!same && !slots_create(slots, texture_width, texture_height, frame_format)) {
+			return;
+		}
+		if (slots_write(slots, frame_surface, client_area ? &client_box : nullptr)) {
+			texture_written = true;
+		}
 	}
 
 	void on_frame_arrived(winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool const &sender,
@@ -150,31 +452,11 @@ struct winrt_capture {
 					texture_height = desc.Height;
 				}
 
-				if (texture) {
-					if (texture_width != gs_texture_get_width(texture) ||
-					    texture_height != gs_texture_get_height(texture)) {
-						gs_texture_destroy(texture);
-						texture = nullptr;
-					}
-				}
-
-				if (!texture) {
-					const gs_color_format color_format =
-						desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? GS_RGBA16F : GS_BGRA;
-					texture = gs_texture_create(texture_width, texture_height, color_format, 1,
-								    NULL, 0);
-				}
-
-				if (client_area) {
-					context->CopySubresourceRegion((ID3D11Texture2D *)gs_texture_get_obj(texture),
-								       0, 0, 0, 0, frame_surface.get(), 0, &client_box);
+				if (vulkan) {
+					copy_frame_vulkan(frame_surface.get(), desc.Format);
 				} else {
-					/* if they gave an SRV, we could avoid this copy */
-					context->CopyResource((ID3D11Texture2D *)gs_texture_get_obj(texture),
-							      frame_surface.get());
+					copy_frame_d3d11(frame_surface.get(), desc.Format);
 				}
-
-				texture_written = true;
 			}
 
 			if (frame_content_size.Width != last_size.Width ||
@@ -197,9 +479,8 @@ struct winrt_capture {
 
 static struct winrt_capture *capture_list;
 
-static void winrt_capture_device_loss_release(void *data)
+static void capture_teardown(winrt_capture *capture)
 {
-	winrt_capture *capture = static_cast<winrt_capture *>(data);
 	capture->active = FALSE;
 
 	capture->frame_arrived.revoke();
@@ -227,6 +508,17 @@ static void winrt_capture_device_loss_release(void *data)
 	capture->context = nullptr;
 	capture->device = nullptr;
 	capture->item = nullptr;
+}
+
+/* On Vulkan a lost renderer device leaves the private D3D11 device, and so the capture session, alive: only the
+ * imported textures need replacing (winrt_capture_device_loss_rebuild). */
+static void winrt_capture_device_loss_release(void *data)
+{
+	winrt_capture *capture = static_cast<winrt_capture *>(data);
+	if (capture->vulkan && bridge && bridge->device && bridge->device->GetDeviceRemovedReason() == S_OK) {
+		return;
+	}
+	capture_teardown(capture);
 }
 
 static bool winrt_capture_border_toggle_supported()
@@ -285,6 +577,19 @@ static void winrt_capture_device_loss_rebuild(void *device_void, void *data)
 {
 	winrt_capture *capture = static_cast<winrt_capture *>(data);
 
+	if (capture->vulkan) {
+		/* Imported textures are placeholders after a device loss; new ones are made with the next frame. */
+		slots_destroy(capture->slots);
+		capture->texture = nullptr;
+		capture->texture_written = false;
+		if (capture->session) {
+			if (bridge_current()) {
+				return; /* the session kept running (winrt_capture_device_loss_release) */
+			}
+			capture_teardown(capture);
+		}
+	}
+
 	auto activation_factory =
 		winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>();
 	auto interop_factory = activation_factory.as<IGraphicsCaptureItemInterop>();
@@ -294,7 +599,11 @@ static void winrt_capture_device_loss_rebuild(void *device_void, void *data)
 		return;
 	}
 
-	ID3D11Device *const d3d_device = (ID3D11Device *)device_void;
+	/* On Vulkan `device_void` is a gs_vulkan_device: capture through the private D3D11 device instead. */
+	if (capture->vulkan && !bridge_create()) {
+		return;
+	}
+	ID3D11Device *const d3d_device = capture->vulkan ? bridge->device.Get() : (ID3D11Device *)device_void;
 	ComPtr<IDXGIDevice> dxgi_device;
 	if (FAILED(d3d_device->QueryInterface(&dxgi_device))) {
 		blog(LOG_ERROR, "Failed to get DXGI device");
@@ -345,7 +654,30 @@ static void winrt_capture_device_loss_rebuild(void *device_void, void *data)
 static struct winrt_capture *winrt_capture_init_internal(BOOL cursor, HWND window, BOOL client_area, BOOL force_sdr,
 							 HMONITOR monitor)
 try {
-	ID3D11Device *const d3d_device = (ID3D11Device *)gs_get_device_obj();
+	obs_enter_graphics();
+	const bool vulkan = renderer_is_vulkan();
+	const bool bridged = vulkan && bridge_create();
+	if (bridged) {
+		++bridge->refs;
+	}
+	obs_leave_graphics();
+	if (vulkan && !bridged) {
+		return nullptr;
+	}
+	/* Holds the bridge reference until the capture owns it (or the init failed). */
+	struct bridge_ref {
+		bool held;
+		~bridge_ref()
+		{
+			if (held) {
+				obs_enter_graphics();
+				bridge_release();
+				obs_leave_graphics();
+			}
+		}
+	} ref{bridged};
+
+	ID3D11Device *const d3d_device = vulkan ? bridge->device.Get() : (ID3D11Device *)gs_get_device_obj();
 	ComPtr<IDXGIDevice> dxgi_device;
 
 	HRESULT hr = d3d_device->QueryInterface(&dxgi_device);
@@ -400,6 +732,8 @@ try {
 	capture->format = format;
 	capture->capture_cursor = cursor && cursor_toggle_supported;
 	capture->cursor_visible = cursor;
+	capture->vulkan = vulkan;
+	ref.held = false; /* the capture's now; winrt_capture_free releases it */
 	capture->item = item;
 	capture->device = device;
 	d3d_device->GetImmediateContext(&capture->context);
@@ -460,11 +794,14 @@ extern "C" EXPORT void winrt_capture_free(struct winrt_capture *capture)
 
 		obs_enter_graphics();
 		gs_unregister_loss_callbacks(capture);
-		gs_texture_destroy(capture->texture);
-		obs_leave_graphics();
-
 		capture->frame_arrived.revoke();
 		capture->closed.revoke();
+		if (capture->vulkan) {
+			slots_destroy(capture->slots); /* capture->texture is one of them */
+		} else {
+			gs_texture_destroy(capture->texture);
+		}
+		obs_leave_graphics();
 
 		try {
 			if (capture->frame_pool) {
@@ -488,7 +825,14 @@ extern "C" EXPORT void winrt_capture_free(struct winrt_capture *capture)
 			blog(LOG_ERROR, "GraphicsCaptureSession::Close (0x%08X)", winrt::to_hresult().value);
 		}
 
+		const bool vulkan = capture->vulkan;
 		delete capture;
+
+		if (vulkan) { /* after the frame pool and the session, which use its device */
+			obs_enter_graphics();
+			bridge_release();
+			obs_leave_graphics();
+		}
 	}
 }
 
@@ -527,6 +871,12 @@ extern "C" EXPORT enum gs_color_space winrt_capture_get_color_space(const struct
 
 extern "C" EXPORT void winrt_capture_render(struct winrt_capture *capture)
 {
+	if (capture->vulkan) {
+		capture->texture = capture->texture_written ? slots_draw_texture(capture->slots) : nullptr;
+		if (!capture->texture) {
+			return;
+		}
+	}
 	if (capture->texture_written) {
 		const char *tech_name = "Draw";
 		float multiplier = 1.f;
@@ -600,7 +950,7 @@ extern "C" EXPORT void winrt_capture_thread_stop()
 {
 	struct winrt_capture *capture = capture_list;
 	while (capture) {
-		winrt_capture_device_loss_release(capture);
+		capture_teardown(capture);
 		capture = capture->next;
 	}
 }
