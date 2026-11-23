@@ -481,6 +481,17 @@ if(ENABLE_VULKAN)
   # pattern, captured through the real pipeline (hook injection, WGC, BitBlt) and read back. KNURBS_TEST_OBS_HOOK_DIR
   # (an OBS Studio installation's data/obs-plugins/win-capture) adds the game capture tests against that hook.
   if(OS_WINDOWS AND TARGET win-capture)
+    # Installing the hook into C:\ProgramData\obs-studio-hook: signed hooks only, never a downgrade.
+    obs_add_unit_test(test_win_capture_hook_install)
+    target_sources(
+      test_win_capture_hook_install
+      PRIVATE "${CMAKE_SOURCE_DIR}/plugins/win-capture/game-capture-hook-install.c"
+    )
+    target_include_directories(test_win_capture_hook_install PRIVATE "${CMAKE_SOURCE_DIR}/plugins/win-capture")
+    target_link_libraries(test_win_capture_hook_install PRIVATE crypt32 wintrust)
+    target_compile_definitions(test_win_capture_hook_install PRIVATE OBS_SIGNED_HOOK_DIR="${KNURBS_OBS_HOOK_DIR}")
+    set_tests_properties(test_win_capture_hook_install PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")
+
     add_executable(test_vulkan_win_capture test_vulkan_win_capture.cpp)
     target_include_directories(test_vulkan_win_capture PRIVATE ${CMOCKA_INCLUDE_DIR})
     target_compile_definitions(test_vulkan_win_capture PRIVATE OBS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

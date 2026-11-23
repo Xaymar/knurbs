@@ -48,6 +48,8 @@ target_sources(
     dxgi-duplicator.cpp
     dxgi-duplicator.h
     game-capture-file-init.c
+    game-capture-hook-install.c
+    game-capture-hook-install.h
     game-capture.c
     load-graphics-offsets.c
     monitor-capture.c
@@ -78,6 +80,8 @@ target_link_libraries(
     OBS::w32-pthreads
     OBS::winrt-headers
     jansson::jansson
+    crypt32
+    wintrust
 )
 
 # Remove once jansson has been fixed on obs-deps
