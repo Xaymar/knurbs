@@ -2169,15 +2169,11 @@ static bool wait_sync_file(gs_device *d, int fd)
 	d->frames.defer_destroy([dev = d->dev, sem] { vkDestroySemaphore(dev, sem, nullptr); });
 	return true;
 }
-#endif
 
+// Sync files are Linux-only: not exported on Windows, where libobs's gs_sync_file_* then return false.
 EXPORT bool device_sync_file_export(gs_device_t *device, struct gs_shared_handle *handle)
 {
 	*handle = gs_shared_handle{GS_HANDLE_NONE, nullptr, -1};
-#ifdef _WIN32
-	(void)device;
-	return false;
-#else
 	const int fd = export_sync_file(device);
 	if (fd < 0) {
 		return false;
@@ -2185,23 +2181,17 @@ EXPORT bool device_sync_file_export(gs_device_t *device, struct gs_shared_handle
 	handle->type = GS_HANDLE_SYNC_FD;
 	handle->fd = fd;
 	return true;
-#endif
 }
 
 EXPORT bool device_sync_file_wait(gs_device_t *device, const struct gs_shared_handle *handle)
 {
-#ifdef _WIN32
-	(void)device;
-	(void)handle;
-	return false;
-#else
 	if (handle->type != GS_HANDLE_SYNC_FD) {
 		blog(LOG_ERROR, "[libobs-vulkan] device_sync_file_wait: not a sync file (type %d)", (int)handle->type);
 		return false;
 	}
 	return wait_sync_file(device, handle->fd);
-#endif
 }
+#endif
 
 // Test hook: copies the first `size` bytes of `buf` to `dst` (after all work recorded so far) and waits for them.
 EXPORT bool obs_vulkan_test_read_sharedbuf(gs_sharedbuf_t *buf, void *dst, uint64_t size)
