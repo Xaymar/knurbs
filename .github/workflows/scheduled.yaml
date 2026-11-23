@@ -96,6 +96,12 @@ jobs:
     needs: cache-cleanup
     secrets: inherit
 
+  test-project:
+    name: Test 🧪
+    uses: ./.github/workflows/test-project.yaml
+    needs: cache-cleanup
+    secrets: inherit
+
   analyze-project:
     name: Analyze 🔬
     uses: ./.github/workflows/analyze-project.yaml
