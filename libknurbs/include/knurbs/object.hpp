@@ -35,7 +35,8 @@ KNURBS_API void weak_release(weak_block *w) noexcept;
 // Intrusive reference-counting base of every libknurbs object. Hold objects through knurbs::ref<T> and
 // knurbs::weak<T> (knurbs/ref.hpp) rather than calling these directly.
 class KNURBS_API object {
-	// Frozen at 1.0: these are the only data members in the public API.
+	// Frozen at 1.0. The data members of the public API are these, deferred_object::queue_ (knurbs/thread.hpp)
+	// and the exception classes' code_ with their std::runtime_error base (knurbs/error.hpp).
 	std::atomic<long> refs_;
 	std::atomic<detail::weak_block *> weak_;
 

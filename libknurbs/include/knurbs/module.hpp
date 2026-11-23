@@ -38,7 +38,9 @@ class module_manager_impl;
 // escaping load or post_load fails the module: its types and aliases are removed and "module <name>: <what>" is
 // logged at level::error. An exception from unload is logged the same way, and also fails the
 // module. Entry points must not call
-// module_manager::load, module_manager::unload_all or core::shutdown.
+// module_manager::load, module_manager::unload_all or core::shutdown, and must not release what may be the core's
+// last reference during load or post_load (for example one the module took in load, once the host dropped its
+// own): that release runs shutdown, which waits for the load in progress, which waits for the entry point.
 //
 // While unload runs the core is already shutting down, so the registry refuses every call (error::core_gone);
 // shutdown drops the registry's references to all types right after.

@@ -36,7 +36,9 @@ public:
 
 	// Returns a non-zero id for remove_sink.
 	std::uint64_t add_sink(sink s);
-	// Unknown ids are ignored. A removed sink is not called again, also not by a write already in progress.
+	// Unknown ids are ignored. A removed sink is not called again, also not by a write already in progress that
+	// has not reached it yet. It does not wait for a call that has: on another thread the sink may still be
+	// running when this returns, so what it uses must stay valid until then.
 	void remove_sink(std::uint64_t id) noexcept;
 
 	template<class... A> void debug(std::format_string<A...> fmt, A &&...args)

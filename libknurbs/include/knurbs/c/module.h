@@ -52,7 +52,8 @@ struct knurbs_module_header {
  *     KNURBS_MODULE_EXPORT void knurbs_module_post_load(knurbs_module_t *m);  (optional)
  *     KNURBS_MODULE_EXPORT void knurbs_module_unload(knurbs_module_t *m);     (optional)
  * They run when and on the threads that knurbs/module.hpp describes for C++ modules, and must not call what it
- * forbids there (knurbs_core_load_modules, knurbs_core_shutdown). A C entry point cannot fail the
+ * forbids there (knurbs_core_load_modules, knurbs_core_shutdown, and in load or post_load a knurbs_release that may
+ * drop the core's last reference). A C entry point cannot fail the
  * module: what it does with the result of a failed call is up to it. It must not let a longjmp escape. */
 typedef struct knurbs_module knurbs_module_t;
 

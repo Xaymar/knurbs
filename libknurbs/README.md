@@ -21,6 +21,11 @@ no tests) since the final review, and its first green run decides both rows. Unt
   LLVM 18), and libc++'s availability markup for `std::format` (floating-point `std::to_chars` needs macOS 13.3,
   which may force the deployment target above 13.0).
 
+The C++ API passes standard library types (`std::string`, `std::vector`, `std::filesystem::path`,
+`std::move_only_function`), so a C++ plugin must be built with the same toolchain and, on Windows, the same
+configuration as libknurbs: a Debug plugin against a Release `knurbs.dll` (another `_ITERATOR_DEBUG_LEVEL`) breaks
+silently. The C API has no such restriction.
+
 ## C++23 library features in use
 
 | Feature | Header | Used in |

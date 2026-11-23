@@ -69,7 +69,8 @@ public:
 	// Finds and loads the core's modules. load() throws error::core_gone once shutdown has begun.
 	knurbs::module_manager &modules() const;
 
-	// Stops the core; see above. Idempotent. The core's last release calls it.
+	// Stops the core; see above. Idempotent. The core's last release calls it. The caller must hold a reference
+	// to the core (or run inside its last release), as for every other member.
 	void shutdown() noexcept;
 	// True once shutdown has begun.
 	bool is_shut_down() const noexcept;
