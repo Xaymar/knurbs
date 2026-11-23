@@ -45,3 +45,4 @@ endfunction()
 
 knurbs_add_test(test_version)
 knurbs_add_test(test_error)
+knurbs_add_test(test_object)
