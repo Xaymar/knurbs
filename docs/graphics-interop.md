@@ -119,8 +119,8 @@ Code that may move to another process uses the exports above instead.
 ## Windows capture (win-capture)
 
 Game capture, window capture and display capture run on the Vulkan renderer as on D3D11. The hook side (graphics-hook, inject-helper,
-`graphics-hook-info.h`, the named objects and the shmem/shtex layouts) is unchanged, so OBS Studio's signed hook works
-with Knurbs; `test_vulkan_win_capture` runs against both (below).
+`graphics-hook-info.h`, the named objects and the shmem/shtex layouts) is unchanged, and Knurbs ships OBS Studio's signed hook binaries rather than building its own
+(see [game-capture-hook.md](game-capture-hook.md)); `test_vulkan_win_capture` runs against them (below).
 
 | Method | Path on Vulkan | Copies per frame in OBS | Sync |
 |---|---|---|---|
@@ -172,10 +172,10 @@ On Vulkan the source registered as `monitor_capture` is now this display capture
 the GDI monitor capture (`monitor-capture.c`), which Vulkan used before. Scenes made on D3D11 therefore keep working;
 the settings of a `monitor_capture` created on Vulkan before (the GDI source's `monitor` index) are not read by it.
 
-Hook files: on start-up win-capture copies its own graphics-hook into `%ProgramData%\obs-studio-hook` when its version
-is higher than the one there (`game-capture-file-init.c`, unchanged from OBS). Knurbs' hook is 1.8.8 and OBS Studio
-31.0.2's is 1.8.6, so running Knurbs from its install directory replaces OBS Studio's signed hook in that shared
-directory with Knurbs' unsigned one, for both programs.
+Hook files: on start-up win-capture copies its graphics-hook into `%ProgramData%\obs-studio-hook` only when it is signed
+by OBS Project, LLC and newer than the one there, and uses the one there only when it is signed (see
+[game-capture-hook.md](game-capture-hook.md)). Knurbs ships OBS Studio 33.0.3's signed hook (1.8.8), so it no longer
+replaces OBS Studio's signed hook in that shared directory with an unsigned one.
 
 ## Texture encoders
 
@@ -322,11 +322,10 @@ Every frame must show one of the two phases (8- and 10-bit: exact colours within
 sRGB conversion fails; RGBA16F: the dominant channel), both must show up, the method must have taken the path above,
 and the validation layer (with synchronization validation) must report nothing. Cases: game capture of a D3D11
 swap chain in each format and in memory mode, with the producer on the renderer's adapter and the hook the producer
-loaded checked against the data dir given; WGC of a D3D11 and of a GDI window, with RGBA16F frames, while the window
+loaded checked against the shipped one and for OBS Project's signature; WGC of a D3D11 and of a GDI window, with RGBA16F frames, while the window
 keeps resizing; BitBlt of a GDI window; game capture and WGC across a simulated device loss; display capture of the primary monitor (DXGI and WGC; a topmost
 borderless window covers it with the pattern and hides the pointer) in SDR and RGBA16F, across a device loss, and
 across a change to a smaller resolution and back (`_mode`, which restores the original mode even when the test fails).
 The display cases need an unlocked, awake desktop (on the lock screen DXGI sends nothing and WGC sends the lock screen)
 and run per-monitor DPI aware, as OBS does. Each runs on the NVIDIA and the AMD adapter, and on the D3D11 renderer as a
-reference. `KNURBS_TEST_OBS_HOOK_DIR` (an OBS Studio
-installation's `data/obs-plugins/win-capture`) adds the game capture cases against that hook.
+reference. The game capture cases run against the hook Knurbs ships, OBS Studio's signed release binaries.
