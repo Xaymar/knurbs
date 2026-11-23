@@ -519,15 +519,15 @@ jobs:
         run: |
           # Configure 🔧
           cmake --preset windows-ci-x64 `
-            -DENABLE_UNIT_TESTS=ON `
-            -DENABLE_FRONTEND=OFF `
-            -DOBS_VERSION_OVERRIDE=33.0.0
+            '-DENABLE_UNIT_TESTS=ON' `
+            '-DENABLE_FRONTEND=OFF' `
+            '-DOBS_VERSION_OVERRIDE=33.0.0'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Unit Tests 🧱
         run: |
           # Build Unit Tests 🧱
-          cmake --build --preset windows-x64 --config RelWithDebInfo --target obs-unit-tests --parallel -- /consoleLoggerParameters:Summary /noLogo
+          cmake --build --preset windows-x64 --config RelWithDebInfo --target obs-unit-tests --parallel '--' '/consoleLoggerParameters:Summary' '/noLogo'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run Unit Tests 🧪
