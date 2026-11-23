@@ -1634,7 +1634,9 @@ void obs_python_load(void)
 	mutexes_loaded = true;
 }
 
+#ifdef ENABLE_FRONTEND
 extern void add_python_frontend_funcs(PyObject *module);
+#endif
 
 static bool python_loaded_at_all = false;
 
@@ -1760,8 +1762,10 @@ bool obs_scripting_load_python(const char *python_path)
 	add_hook_functions(py_obspython);
 	py_error();
 
+#ifdef ENABLE_FRONTEND
 	add_python_frontend_funcs(py_obspython);
 	py_error();
+#endif
 
 out:
 	/* ---------------------------------------------- */
