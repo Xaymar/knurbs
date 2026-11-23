@@ -380,14 +380,22 @@ static bool tex_encode(void *data, struct encoder_texture *tex, int64_t, uint64_
 	const bool p010 = c->format == VIDEO_FORMAT_P010;
 	std::vector<image> planes = planes_of(c->format, c->prefix);
 	obs_enter_graphics();
+#ifdef _WIN32
 	// D3D11 creates the frames with a keyed mutex (GS_SHARED_KM_TEX); Vulkan has none (both calls return -1).
 	gs_texture_acquire_sync(tex->tex[0], lock_key, GS_WAIT_INFINITE);
+#else
+	(void)lock_key; // keyed mutexes are Windows-only
+#endif
 	gs_stagesurf_t *s = p010 ? gs_stagesurface_create_p010(W, H) : gs_stagesurface_create_nv12(W, H);
 	bool ok = s != nullptr;
 	if (ok) {
 		gs_stage_texture(s, tex->tex[0]);
 	}
+#ifdef _WIN32
 	gs_texture_release_sync(tex->tex[0], *next_key);
+#else
+	(void)next_key;
+#endif
 	uint8_t *data_ptr;
 	uint32_t linesize;
 	ok = ok && gs_stagesurface_map(s, &data_ptr, &linesize);

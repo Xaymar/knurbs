@@ -253,6 +253,8 @@ bool load_graphics_imports(struct gs_exports *exports, void *module, const char 
 	GRAPHICS_IMPORT_OPTIONAL(device_timeline_signal_cpu);
 	GRAPHICS_IMPORT_OPTIONAL(device_sync_file_export);
 	GRAPHICS_IMPORT_OPTIONAL(device_sync_file_wait);
+	GRAPHICS_IMPORT_OPTIONAL(device_stagesurface_create_nv12);
+	GRAPHICS_IMPORT_OPTIONAL(device_stagesurface_create_p010);
 
 	/* OSX/Cocoa specific functions */
 #ifdef __APPLE__
@@ -283,8 +285,6 @@ bool load_graphics_imports(struct gs_exports *exports, void *module, const char 
 	GRAPHICS_IMPORT_OPTIONAL(device_texture_wrap_obj);
 	GRAPHICS_IMPORT_OPTIONAL(device_texture_acquire_sync);
 	GRAPHICS_IMPORT_OPTIONAL(device_texture_release_sync);
-	GRAPHICS_IMPORT_OPTIONAL(device_stagesurface_create_nv12);
-	GRAPHICS_IMPORT_OPTIONAL(device_stagesurface_create_p010);
 	GRAPHICS_IMPORT_OPTIONAL(device_register_loss_callbacks);
 	GRAPHICS_IMPORT_OPTIONAL(device_unregister_loss_callbacks);
 #elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)

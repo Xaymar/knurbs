@@ -913,7 +913,6 @@ EXPORT void gs_stagesurface_unmap(gs_stagesurf_t *stagesurf)
 	stagesurf->mapped = false;
 }
 
-#ifdef _WIN32
 EXPORT gs_stagesurf_t *device_stagesurface_create_nv12(gs_device_t *device, uint32_t width, uint32_t height)
 {
 	COUNT(device_stagesurface_create_nv12);
@@ -933,7 +932,6 @@ EXPORT gs_stagesurf_t *device_stagesurface_create_p010(gs_device_t *device, uint
 	/* both planes in one buffer, the UV plane after the Y plane */
 	return device_stagesurface_create(device, width, height + height / 2, GS_R16);
 }
-#endif
 
 EXPORT gs_zstencil_t *device_zstencil_create(gs_device_t *device, uint32_t width, uint32_t height,
 					     enum gs_zstencil_format format)
