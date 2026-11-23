@@ -47,8 +47,11 @@ static void file_io_test(void **state)
 	assert_string_equal(utf8, text);
 	bfree(utf8);
 	rewind(f);
+	/* whether non-ASCII text converts depends on the locale (in the C locale glibc converts none of it) */
 	char *mbs = NULL;
-	assert_true(os_fread_mbs(f, &mbs) > 0);
+	size_t mbs_len = os_fread_mbs(f, &mbs);
+	assert_non_null(mbs);
+	assert_int_equal(strlen(mbs), mbs_len);
 	bfree(mbs);
 	fclose(f);
 
@@ -67,6 +70,12 @@ static void file_io_test(void **state)
 	read = os_quick_read_mbs_file("mbs.txt");
 	assert_string_equal(read, "plain");
 	bfree(read);
+	f = os_fopen("mbs.txt", "rb");
+	assert_non_null(f);
+	assert_int_equal(os_fread_mbs(f, &mbs), 5);
+	assert_string_equal(mbs, "plain");
+	bfree(mbs);
+	fclose(f);
 
 	/* empty and missing files */
 	write_text("empty.txt", "");
@@ -316,21 +325,33 @@ static void module_test(void **state)
 {
 	UNUSED_PARAMETER(state);
 
-	void *kernel = os_dlopen("kernel32");
-	assert_non_null(kernel);
-	assert_non_null(os_dlsym(kernel, "GetTickCount"));
-	assert_null(os_dlsym(kernel, "NoSuchFunction"));
-	os_dlclose(kernel);
+	/* a system library that every process can load */
+#ifdef _WIN32
+	void *lib = os_dlopen("kernel32");
+	const char *func = "GetTickCount";
+#else
+	void *lib = os_dlopen("libm.so.6");
+	const char *func = "cos";
+#endif
+	assert_non_null(lib);
+	assert_non_null(os_dlsym(lib, func));
+	assert_null(os_dlsym(lib, "NoSuchFunction"));
+	os_dlclose(lib);
 
 	assert_null(os_dlopen("no-such-module"));
 	assert_null(os_dlopen("no-such-dir/no-such-module"));
 	assert_null(os_dlopen(NULL));
 	os_dlclose(NULL);
 
+#ifdef _WIN32
 	assert_false(os_is_obs_plugin("no-such-plugin.dll"));
 	char *exe = os_get_executable_path_ptr("test_util_platform.exe");
 	assert_false(os_is_obs_plugin(exe));
 	bfree(exe);
+#else
+	/* only Windows inspects the file; everywhere else any path counts as a plugin */
+	assert_true(os_is_obs_plugin("no-such-plugin.so"));
+#endif
 }
 
 static void system_test(void **state)
