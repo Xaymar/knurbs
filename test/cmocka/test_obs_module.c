@@ -13,6 +13,21 @@
 
 typedef int (*count_fn)(void);
 
+/* the platform's module file extension (.dll, .so), taken from the fake module's file name */
+static const char *module_ext(void)
+{
+	const char *ext = strrchr(FAKE_MODULE_PATH, '.');
+	assert_non_null(ext);
+	return ext;
+}
+
+/* the fake module's file name, without its folder */
+static const char *module_file(void)
+{
+	const char *slash = strrchr(FAKE_MODULE_PATH, '/');
+	return slash ? slash + 1 : FAKE_MODULE_PATH;
+}
+
 static int count(obs_module_t *module, const char *name)
 {
 	count_fn fn = (count_fn)os_dlsym(obs_get_module_lib(module), name);
@@ -41,7 +56,7 @@ static void open_test(void **state)
 	obs_module_t *module = NULL;
 	assert_int_equal(obs_open_module(&module, FAKE_MODULE_PATH, FAKE_MODULE_DATA), MODULE_SUCCESS);
 	assert_non_null(module);
-	assert_string_equal(obs_get_module_file_name(module), "fake-module.dll");
+	assert_string_equal(obs_get_module_file_name(module), module_file());
 	assert_string_equal(obs_get_module_binary_path(module), FAKE_MODULE_PATH);
 	assert_string_equal(obs_get_module_data_path(module), FAKE_MODULE_DATA);
 	assert_int_equal(count(module, "fake_module_loads"), 0);
@@ -160,19 +175,23 @@ static void dotted_paths_test(void **state)
 {
 	UNUSED_PARAMETER(state);
 
-	/* per-module folders under a dotted parent: <root>/plugins/com.example.plugin/bin/64bit/com.example.plugin.dll */
+	/* the module file, with the platform's extension: com.example.plugin.dll, com.example.plugin.so */
+	char file[64], in_folder[256], in_flat[256];
+	snprintf(file, sizeof(file), "com.example.plugin%s", module_ext());
+	snprintf(in_folder, sizeof(in_folder), "dotted.root/plugins/com.example.plugin/bin/64bit/%s", file);
+	snprintf(in_flat, sizeof(in_flat), "dotted.root/flat/%s", file);
+
+	/* per-module folders under a dotted parent: <root>/plugins/com.example.plugin/bin/64bit/<file> */
 	assert_true(os_mkdirs("dotted.root/plugins/com.example.plugin/bin/64bit") != MKDIR_ERROR);
 	assert_true(os_mkdirs("dotted.root/plugins/com.example.plugin/data") != MKDIR_ERROR);
 	/* left from an earlier run */
-	os_unlink("dotted.root/plugins/com.example.plugin/bin/64bit/com.example.plugin.dll");
-	os_unlink("dotted.root/flat/com.example.plugin.dll");
-	assert_int_equal(os_copyfile(FAKE_MODULE_PATH,
-				     "dotted.root/plugins/com.example.plugin/bin/64bit/com.example.plugin.dll"),
-			 0);
-	/* the flat layout: <root>/flat/com.example.plugin.dll, data in <root>/flat-data/com.example.plugin */
+	os_unlink(in_folder);
+	os_unlink(in_flat);
+	assert_int_equal(os_copyfile(FAKE_MODULE_PATH, in_folder), 0);
+	/* the flat layout: <root>/flat/<file>, data in <root>/flat-data/com.example.plugin */
 	assert_true(os_mkdirs("dotted.root/flat") != MKDIR_ERROR);
 	assert_true(os_mkdirs("dotted.root/flat-data/com.example.plugin") != MKDIR_ERROR);
-	assert_int_equal(os_copyfile(FAKE_MODULE_PATH, "dotted.root/flat/com.example.plugin.dll"), 0);
+	assert_int_equal(os_copyfile(FAKE_MODULE_PATH, in_flat), 0);
 
 	/* allocated before core_start(), which counts allocations from there */
 	char *root = abs_path("dotted.root");
@@ -191,7 +210,7 @@ static void dotted_paths_test(void **state)
 	obs_find_modules2(on_found, &found);
 	assert_int_equal(found.count, 1);
 	assert_string_equal(found.name, "com.example.plugin");
-	dstr_printf(&want_bin, "%s/plugins/com.example.plugin/bin/64bit/com.example.plugin.dll", root);
+	dstr_printf(&want_bin, "%s/plugins/com.example.plugin/bin/64bit/%s", root, file);
 	dstr_printf(&want_data, "%s/plugins/com.example.plugin/data", root);
 	assert_string_equal(found.bin, want_bin.array);
 	assert_string_equal(found.data, want_data.array);
@@ -209,7 +228,7 @@ static void dotted_paths_test(void **state)
 	obs_module_failure_info_free(&mfi);
 	obs_module_t *module = obs_get_module("com.example.plugin");
 	assert_non_null(module);
-	assert_string_equal(obs_get_module_file_name(module), "com.example.plugin.dll");
+	assert_string_equal(obs_get_module_file_name(module), file);
 	assert_string_equal(obs_get_module_binary_path(module), want_bin.array);
 	assert_string_equal(obs_get_module_data_path(module), want_data.array);
 
@@ -224,7 +243,7 @@ static void dotted_paths_test(void **state)
 	obs_find_modules2(on_found, &found);
 	assert_int_equal(found.count, 1);
 	assert_string_equal(found.name, "com.example.plugin");
-	dstr_printf(&want_bin, "%s/flat/com.example.plugin.dll", root);
+	dstr_printf(&want_bin, "%s/flat/%s", root, file);
 	dstr_printf(&want_data, "%s/flat-data/com.example.plugin", root);
 	assert_string_equal(found.bin, want_bin.array);
 	assert_string_equal(found.data, want_data.array);
