@@ -420,12 +420,28 @@ Each layer has its own tests and is usable before the next one starts.
 - **Plugins will all run in their own process** (containerized through
   datapath) so that a crashing plugin can't take Knurbs down, and each
   plugin process has its own Vulkan context (Xaymar, 2026-11-23). Until
-  datapath exists, plugins load in-process, but they are already designed as
+  the out-of-process host is built, plugins load in-process, but they are already designed as
   if they were out of process: a plugin never gets the core's `VkDevice` or
   raw `VkImage`s. It gets GPU resources only as exported memory plus exported
   synchronization (timeline semaphores or sync files), and imports them into
   its own device. The in-process mode is a convenience, not a separate
   model.
+- **datapath is ready** (https://github.com/Xaymar/datapath, Xaymar,
+  2026-11-23). One message carries up to 64 KiB, and a round trip stays under
+  0.5 ms even with the system fully loaded. Shared memory, which brings the
+  idle 99.9th percentile under 1 µs, is still being worked on. That shapes the
+  interfaces:
+  - **Coarse-grained calls.** Interfaces are built around a few calls per
+    frame or per settings change (one `render` with all inputs, one `update`
+    with the whole `data`), not chatty getters, so that a 0.5 ms round trip
+    per call stays affordable.
+  - **Bulk data never goes through messages.** Frames, textures and audio
+    buffers cross as exported handles (GPU memory, shared memory) and only
+    their descriptors travel in the message. Anything else that could exceed
+    64 KiB (large `data` trees, property lists) is split by the proxy layer,
+    never by the plugin.
+  - The out-of-process plugin host can be built as soon as the plugin
+    interfaces of layer 6 exist, instead of waiting for datapath.
 - **Every interface must be proxyable** so that datapath can run the plugin in
   another process. In-process plugins get live objects. The datapath
   host implements the same interfaces and forwards each call over IPC. For that
