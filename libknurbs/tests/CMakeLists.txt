@@ -27,7 +27,10 @@ add_custom_target(knurbs-tests)
 function(knurbs_add_test name)
   if("C" IN_LIST ARGN)
     add_executable(${name} c/${name}.c)
-    set_target_properties(${name} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    set_target_properties(
+      ${name}
+      PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+    )
   else()
     add_executable(${name} ${name}.cpp)
   endif()
