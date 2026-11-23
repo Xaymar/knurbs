@@ -155,6 +155,11 @@ static void test_from_json_rejects_unrepresentable(void **)
 	KNURBS_ASSERT_THROWS(data::from_json("{\"a\":[1]}"), error::invalid_argument);
 	KNURBS_ASSERT_THROWS(data::from_json("{\"a\":[[]]}"), error::invalid_argument);
 	KNURBS_ASSERT_THROWS(data::from_json("{\"a\":18446744073709551615}"), error::invalid_argument);
+	// Beyond std::uint64_t the parser sees a floating-point number; it is still an integer out of range.
+	KNURBS_ASSERT_THROWS(data::from_json("{\"a\":18446744073709551616}"), error::invalid_argument);
+	KNURBS_ASSERT_THROWS(data::from_json("{\"a\":-9223372036854775809}"), error::invalid_argument);
+	assert_true(data::from_json("{\"a\":1e30}")->get_double("a") == 1e30);
+	assert_true(data::from_json("{\"a\":2.5E1}")->get_double("a") == 25.0);
 	KNURBS_ASSERT_THROWS(data::from_json("{\"Bad_Key\":1}"), error::invalid_argument);
 
 	ref<data> d = data::from_json("{\"a\":9223372036854775807,\"b\":[]}");

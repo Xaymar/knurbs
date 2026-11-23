@@ -329,7 +329,15 @@ public:
 		}
 		return put(static_cast<std::int64_t>(value));
 	}
-	bool number_float(json::number_float_t value, const json::string_t &) { return put(double{value}); }
+	bool number_float(json::number_float_t value, const json::string_t &text)
+	{
+		// The parser hands integers too large for its integer types over as floating point. A literal without a
+		// fraction or exponent is such an integer: reject it rather than store it rounded.
+		if (text.find_first_of(".eE") == json::string_t::npos) {
+			return fail(std::format("integer {} is out of range", text));
+		}
+		return put(double{value});
+	}
 	bool string(json::string_t &value) { return put(std::move(value)); }
 	bool binary(json::binary_t &) { return fail("binary values are not supported"); }
 
