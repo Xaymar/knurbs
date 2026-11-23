@@ -338,6 +338,30 @@ jobs:
 
           echo "cacheKey=${cache_key}" >> $GITHUB_OUTPUT
 
+      - name: Keep Flatpak Data Beside the Build 🗂️
+        run: |
+          : Keep Flatpak Data Beside the Build 🗂️
+          if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
+
+          # flatpak-builder keeps its cache (.flatpak-builder) in the workspace, which is a bind mount, while the
+          # image's Flatpak installation lives on the container's overlay. Flatpak no longer handles the two being
+          # on different devices ("Invalid cross-device link" while updating the SDK), so the user installation
+          # moves onto the workspace's mount and the dependencies are installed fresh there. It stays outside the
+          # repository, which the manifest copies as a "dir" source.
+          echo ::group::Flatpak installations before the move
+          flatpak --installations || true
+          flatpak list --runtime --columns=ref,installation || true
+          for path in / /var/lib/flatpak "${HOME}" "${GITHUB_WORKSPACE}" /var/tmp "${FLATPAK_USER_DIR:-${HOME}/.local/share/flatpak}"; do
+            findmnt --noheadings --output TARGET,SOURCE,FSTYPE --target "${path}" || true
+          done
+          echo ::endgroup::
+
+          user_dir="$(dirname "$(dirname "${GITHUB_WORKSPACE}")")/flatpak-user"
+          mkdir -p "${user_dir}"
+          echo "FLATPAK_USER_DIR=${user_dir}" >> "${GITHUB_ENV}"
+          FLATPAK_USER_DIR="${user_dir}" flatpak remote-add --user --if-not-exists flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+
       - name: Validate Flatpak manifest
         uses: ./.github/actions/flatpak-builder-lint
         with:
