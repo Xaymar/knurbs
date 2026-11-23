@@ -429,13 +429,19 @@ Each layer has its own tests and is usable before the next one starts.
 - **datapath is ready** (https://github.com/Xaymar/datapath, Xaymar,
   2026-11-23). One message carries up to 64 KiB. A round trip averages about
   80 µs, and stays under 0.5 ms even in the worst case of 100% CPU load on all
-  cores and threads. Shared memory, which brings the idle 99.9th percentile
-  under 1 µs, is still being worked on. That shapes the interfaces:
+  cores and threads. The shared-memory path (benchmarked 2026-11-23) is far
+  faster. Idle, a message takes about 2 µs on Windows (about 10 µs for
+  16-byte messages) and under 1 µs on Linux up to 256 bytes. At 1 KiB it
+  takes about 2.5 µs on Windows and 1 µs on Linux, and at 4 KiB about 4.5 µs
+  and 1.5 µs. Above that, latency doubles each time the size quadruples. Under
+  stress the numbers varied widely, but usually stayed within double the idle
+  figures. That shapes the interfaces:
   - **Coarse-grained calls.** Interfaces are built around a few calls per
     frame or per settings change (one `render` with all inputs, one `update`
-    with the whole `data`), not chatty getters. At about 80 µs per round
-    trip, a handful of calls per frame is cheap, but a getter per property
-    per frame would not be.
+    with the whole `data`), not chatty getters. Shared memory makes a
+    handful of calls per frame cheap, but a getter per property per frame
+    would still add up, and the pipe/socket path (about 80 µs) must keep
+    working too.
   - **Bulk data never goes through messages.** Frames, textures and audio
     buffers cross as exported handles (GPU memory, shared memory) and only
     their descriptors travel in the message. Anything else that could exceed
