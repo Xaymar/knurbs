@@ -94,10 +94,12 @@ static int create_instance(gs_device *d, bool reopen)
 	std::vector<VkExtensionProperties> eprops(n);
 	vkEnumerateInstanceExtensionProperties(nullptr, &n, eprops.data());
 
-	// Presenting needs both; without them the device still works headless and swapchain creation fails.
-	// TODO(linux): VK_KHR_xlib/xcb/wayland_surface, see vulkan-swapchain.cpp.
+	// Presenting needs both; without them the device still works headless and swapchain creation fails. Linux
+	// presents to Wayland only (X11 is not supported).
 #ifdef _WIN32
 	const char *surface_ext = "VK_KHR_win32_surface";
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)
+	const char *surface_ext = "VK_KHR_wayland_surface";
 #else
 	const char *surface_ext = nullptr;
 #endif

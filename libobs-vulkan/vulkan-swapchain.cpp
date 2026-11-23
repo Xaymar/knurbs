@@ -9,6 +9,9 @@
 #include <windows.h>
 #include <dxgi1_6.h>
 #include <vulkan/vulkan_win32.h>
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)
+#include <obs-nix-platform.h>
+#include <vulkan/vulkan_wayland.h>
 #endif
 
 #include <algorithm>
@@ -163,11 +166,26 @@ static bool create_surface(gs_device *d, const gs_window &window, VkSurfaceKHR &
 		return false;
 	}
 	return true;
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)
+	// Wayland only (X11 is not supported): as libobs-opengl's Wayland EGL path, gs_window::display is the window's
+	// wl_surface and the wl_display is libobs's platform display.
+	if (obs_get_nix_platform() != OBS_NIX_PLATFORM_WAYLAND || !obs_get_nix_platform_display() || !window.display) {
+		blog(LOG_ERROR, "[libobs-vulkan] device_swapchain_create: needs a Wayland surface on libobs's Wayland "
+				"display (X11 is not supported)");
+		return false;
+	}
+	VkWaylandSurfaceCreateInfoKHR wi = {VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR};
+	wi.display = (struct wl_display *)obs_get_nix_platform_display();
+	wi.surface = (struct wl_surface *)window.display;
+	if (vkCreateWaylandSurfaceKHR(d->instance, &wi, nullptr, &surface) != VK_SUCCESS) {
+		blog(LOG_ERROR, "[libobs-vulkan] device_swapchain_create: vkCreateWaylandSurfaceKHR failed");
+		surface = VK_NULL_HANDLE;
+		return false;
+	}
+	return true;
 #else
-	// TODO(linux): Xlib/xcb (window.display, window.id) and Wayland surfaces. Not written: their headers and instance
-	// extensions cannot be built or tested in this (Windows-only) branch.
 	(void)d, (void)window;
-	blog(LOG_ERROR, "[libobs-vulkan] device_swapchain_create: no surface support on this platform yet");
+	blog(LOG_ERROR, "[libobs-vulkan] device_swapchain_create: no surface support on this platform");
 	return false;
 #endif
 }

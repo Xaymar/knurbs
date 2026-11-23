@@ -203,7 +203,8 @@ if(ENABLE_VULKAN)
   target_link_libraries(test_vulkan_upload PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
   add_test(test_vulkan_upload test_vulkan_upload)
 
-  # Swapchain and present on hidden Win32 windows; skips without a device or windowing.
+  # Swapchain and present on hidden Win32 windows, or Wayland toplevels on a headless weston the test starts; skips
+  # without a device or windowing.
   add_executable(test_vulkan_swapchain test_vulkan_swapchain.cpp)
   target_include_directories(test_vulkan_swapchain PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan)
   target_compile_definitions(
@@ -212,6 +213,27 @@ if(ENABLE_VULKAN)
   )
   add_dependencies(test_vulkan_swapchain libobs-vulkan)
   target_link_libraries(test_vulkan_swapchain PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
+  if(OS_LINUX)
+    # Wayland: xdg toplevels on a headless weston the test starts, read back through weston-screenshooter (PNG).
+    find_package(PkgConfig REQUIRED)
+    find_package(PNG REQUIRED)
+    pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+    pkg_get_variable(_wayland_protocols wayland-protocols pkgdatadir)
+    find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
+    set(_xdg_shell "${_wayland_protocols}/stable/xdg-shell/xdg-shell.xml")
+    set(_gen "${CMAKE_CURRENT_BINARY_DIR}/wayland")
+    add_custom_command(
+      OUTPUT "${_gen}/xdg-shell-client-protocol.h" "${_gen}/xdg-shell-protocol.c"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${_gen}"
+      COMMAND "${WAYLAND_SCANNER}" client-header "${_xdg_shell}" "${_gen}/xdg-shell-client-protocol.h"
+      COMMAND "${WAYLAND_SCANNER}" private-code "${_xdg_shell}" "${_gen}/xdg-shell-protocol.c"
+      DEPENDS "${_xdg_shell}"
+      VERBATIM
+    )
+    target_sources(test_vulkan_swapchain PRIVATE "${_gen}/xdg-shell-protocol.c" "${_gen}/xdg-shell-client-protocol.h")
+    target_include_directories(test_vulkan_swapchain PRIVATE "${_gen}")
+    target_link_libraries(test_vulkan_swapchain PRIVATE PkgConfig::WAYLAND_CLIENT PNG::PNG)
+  endif()
   add_test(test_vulkan_swapchain test_vulkan_swapchain)
 
   # Shader translation and params; the effect parser is compiled in (ep_parse is not exported). No device needed
