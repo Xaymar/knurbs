@@ -545,8 +545,8 @@ target_compile_definitions(
 )
 add_dependencies(test_obs_module fake-module)
 
-# Every test program reports failures on stderr instead of opening a dialog (see noninteractive.c), and no
-# test may hang the run.
+# Every test program reports failures on stderr instead of opening a dialog (see noninteractive.c), finds
+# obs.dll and the obs-deps libraries, and no test may hang the run.
 get_property(_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(_target IN LISTS _test_targets)
   get_target_property(_type ${_target} TYPE)
@@ -555,4 +555,4 @@ foreach(_target IN LISTS _test_targets)
   endif()
 endforeach()
 get_property(_tests DIRECTORY PROPERTY TESTS)
-set_tests_properties(${_tests} PROPERTIES TIMEOUT 300)
+set_tests_properties(${_tests} PROPERTIES TIMEOUT 300 ENVIRONMENT_MODIFICATION "${_obs_runtime_env}")
