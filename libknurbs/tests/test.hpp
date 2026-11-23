@@ -21,6 +21,12 @@ extern "C" {
 #include <cmocka.h>
 }
 
+// cmocka 2 defines a function-like stop() macro, which turns calls such as `queue->stop()` into `_stop`.
+// The tests never use it, so drop it.
+#ifdef stop
+#undef stop
+#endif
+
 // Fails the test unless `expr` throws an exception of type `Type`.
 #define KNURBS_ASSERT_THROWS(expr, Type)                                                        \
 	do {                                                                                    \
