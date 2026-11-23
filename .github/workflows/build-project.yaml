@@ -302,10 +302,11 @@ jobs:
             -DOBS_VERSION_OVERRIDE=33.0.0 \
             -DCMAKE_PREFIX_PATH:PATH="${GITHUB_WORKSPACE}/.deps"
 
-      - name: Build Unit Tests 🧱
+      - name: Build 🧱
         run: |
-          : Build Unit Tests 🧱
-          /usr/bin/cmake --build build_ubuntu --target obs-unit-tests knurbs-tests --parallel
+          : Build 🧱
+          # Everything, not only the unit test targets: some tests need plugins and modules from other targets.
+          /usr/bin/cmake --build build_ubuntu --parallel
 
       - name: Run Unit Tests 🧪
         run: |
@@ -524,10 +525,11 @@ jobs:
             '-DOBS_VERSION_OVERRIDE=33.0.0'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build Unit Tests 🧱
+      - name: Build 🧱
         run: |
-          # Build Unit Tests 🧱
-          cmake --build --preset windows-x64 --config RelWithDebInfo --target obs-unit-tests knurbs-tests --parallel '--' '/consoleLoggerParameters:Summary' '/noLogo'
+          # Build 🧱
+          # Everything, not only the unit test targets: some tests need plugins and modules from other targets.
+          cmake --build --preset windows-x64 --config RelWithDebInfo --parallel '--' '/consoleLoggerParameters:Summary' '/noLogo'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run Unit Tests 🧪
