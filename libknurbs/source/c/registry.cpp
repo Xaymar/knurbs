@@ -67,7 +67,7 @@ public:
 		if (!properties_) {
 			return type::properties(settings);
 		}
-		auto *handle = detail::c_to_typed_handle<const knurbs_data_t>(const_cast<data *>(&settings));
+		const knurbs_data_t *handle = detail::c_to_typed_handle<knurbs_data_t>(&settings);
 		knurbs_properties_t *result = properties_(param_.get(), handle);
 		if (!result) {
 			return knurbs::properties::create();

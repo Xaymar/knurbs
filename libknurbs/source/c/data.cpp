@@ -20,6 +20,16 @@ data_array &self(knurbs_data_array_t *handle)
 	return detail::c_self<data_array>(handle, "array");
 }
 
+const data &self(const knurbs_data_t *handle)
+{
+	return detail::c_self<data>(handle, "data");
+}
+
+const data_array &self(const knurbs_data_array_t *handle)
+{
+	return detail::c_self<data_array>(handle, "array");
+}
+
 ref<data> retain(knurbs_data_t *handle)
 {
 	return ref<data>::retain(handle ? detail::c_from_typed_handle<data>(handle) : nullptr);
@@ -59,7 +69,7 @@ knurbs_result knurbs_data_from_json(const char *json, knurbs_data_t **out)
 	});
 }
 
-knurbs_result knurbs_data_to_json(knurbs_data_t *handle, bool pretty, char **out)
+knurbs_result knurbs_data_to_json(const knurbs_data_t *handle, bool pretty, char **out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -67,7 +77,7 @@ knurbs_result knurbs_data_to_json(knurbs_data_t *handle, bool pretty, char **out
 	});
 }
 
-knurbs_result knurbs_data_clone(knurbs_data_t *handle, knurbs_data_t **out)
+knurbs_result knurbs_data_clone(const knurbs_data_t *handle, knurbs_data_t **out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -75,7 +85,7 @@ knurbs_result knurbs_data_clone(knurbs_data_t *handle, knurbs_data_t **out)
 	});
 }
 
-knurbs_result knurbs_data_has(knurbs_data_t *handle, const char *key, bool *out)
+knurbs_result knurbs_data_has(const knurbs_data_t *handle, const char *key, bool *out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -83,7 +93,7 @@ knurbs_result knurbs_data_has(knurbs_data_t *handle, const char *key, bool *out)
 	});
 }
 
-knurbs_result knurbs_data_has_user_value(knurbs_data_t *handle, const char *key, bool *out)
+knurbs_result knurbs_data_has_user_value(const knurbs_data_t *handle, const char *key, bool *out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -96,7 +106,7 @@ knurbs_result knurbs_data_erase(knurbs_data_t *handle, const char *key)
 	return detail::c_guard([&] { self(handle).erase(detail::c_text(key, "key")); });
 }
 
-knurbs_result knurbs_data_keys(knurbs_data_t *handle, char ***out_keys, size_t *out_count)
+knurbs_result knurbs_data_keys(const knurbs_data_t *handle, char ***out_keys, size_t *out_count)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out_keys, "out_keys");
@@ -105,7 +115,7 @@ knurbs_result knurbs_data_keys(knurbs_data_t *handle, char ***out_keys, size_t *
 	});
 }
 
-knurbs_result knurbs_data_get_bool(knurbs_data_t *handle, const char *key, bool *out)
+knurbs_result knurbs_data_get_bool(const knurbs_data_t *handle, const char *key, bool *out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -113,7 +123,7 @@ knurbs_result knurbs_data_get_bool(knurbs_data_t *handle, const char *key, bool 
 	});
 }
 
-knurbs_result knurbs_data_get_int(knurbs_data_t *handle, const char *key, int64_t *out)
+knurbs_result knurbs_data_get_int(const knurbs_data_t *handle, const char *key, int64_t *out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -121,7 +131,7 @@ knurbs_result knurbs_data_get_int(knurbs_data_t *handle, const char *key, int64_
 	});
 }
 
-knurbs_result knurbs_data_get_double(knurbs_data_t *handle, const char *key, double *out)
+knurbs_result knurbs_data_get_double(const knurbs_data_t *handle, const char *key, double *out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -129,7 +139,7 @@ knurbs_result knurbs_data_get_double(knurbs_data_t *handle, const char *key, dou
 	});
 }
 
-knurbs_result knurbs_data_get_string(knurbs_data_t *handle, const char *key, char **out)
+knurbs_result knurbs_data_get_string(const knurbs_data_t *handle, const char *key, char **out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -137,7 +147,7 @@ knurbs_result knurbs_data_get_string(knurbs_data_t *handle, const char *key, cha
 	});
 }
 
-knurbs_result knurbs_data_get_object(knurbs_data_t *handle, const char *key, knurbs_data_t **out)
+knurbs_result knurbs_data_get_object(const knurbs_data_t *handle, const char *key, knurbs_data_t **out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -145,7 +155,7 @@ knurbs_result knurbs_data_get_object(knurbs_data_t *handle, const char *key, knu
 	});
 }
 
-knurbs_result knurbs_data_get_array(knurbs_data_t *handle, const char *key, knurbs_data_array_t **out)
+knurbs_result knurbs_data_get_array(const knurbs_data_t *handle, const char *key, knurbs_data_array_t **out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -223,7 +233,7 @@ knurbs_result knurbs_data_array_create(knurbs_data_array_t **out)
 	});
 }
 
-knurbs_result knurbs_data_array_size(knurbs_data_array_t *handle, size_t *out)
+knurbs_result knurbs_data_array_size(const knurbs_data_array_t *handle, size_t *out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);
@@ -231,7 +241,7 @@ knurbs_result knurbs_data_array_size(knurbs_data_array_t *handle, size_t *out)
 	});
 }
 
-knurbs_result knurbs_data_array_at(knurbs_data_array_t *handle, size_t index, knurbs_data_t **out)
+knurbs_result knurbs_data_array_at(const knurbs_data_array_t *handle, size_t index, knurbs_data_t **out)
 {
 	return detail::c_guard([&] {
 		detail::c_out(out);

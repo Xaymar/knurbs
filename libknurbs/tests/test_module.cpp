@@ -402,11 +402,16 @@ knurbs_properties_t *no_properties(void *, const knurbs_data_t *)
 	return nullptr;
 }
 
-knurbs_properties_t *one_property(void *, const knurbs_data_t *)
+// Reads its settings through the const handle, without a cast: "hidden" set to true leaves the list empty.
+knurbs_properties_t *one_property(void *, const knurbs_data_t *settings)
 {
 	knurbs_properties_t *props = nullptr;
 	knurbs_property_t *prop = nullptr;
-	if (knurbs_properties_create(&props) == KNURBS_OK &&
+	bool hidden = false;
+	if (knurbs_data_get_bool(settings, "hidden", &hidden) != KNURBS_OK) {
+		hidden = false; // not set
+	}
+	if (knurbs_properties_create(&props) == KNURBS_OK && !hidden &&
 	    knurbs_properties_add_bool(props, "on", "On", &prop) == KNURBS_OK) {
 		knurbs_release(reinterpret_cast<knurbs_object_t *>(prop));
 	}
@@ -535,6 +540,8 @@ static void test_c_registry_optional_callbacks(void **)
 	auto p = c->registry().find("com.example.c.props")->properties(*settings);
 	assert_int_equal(p->list().size(), 1);
 	assert_true(static_cast<bool>(p->find("on")));
+	settings->set_bool("hidden", true);
+	assert_true(c->registry().find("com.example.c.props")->properties(*settings)->list().empty());
 }
 
 static void test_c_registry_add_alias(void **)

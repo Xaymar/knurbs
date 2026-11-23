@@ -47,8 +47,8 @@ struct knurbs_type_info {
 	/* Fills in the default values of the settings. May be NULL: no defaults. */
 	void (*defaults)(void *param, knurbs_data_t *settings);
 	/* Describes the settings of an object of this type. Returns an owned reference, which the library takes over,
-	 * or NULL for no properties (an empty list). The settings are only read: the data getters take a non-const
-	 * handle, so cast the const away for them, but never change the settings. May be NULL: no properties. */
+	 * or NULL for no properties (an empty list). The settings are only read; the read-only functions of
+	 * knurbs/c/data.h take the const handle as it is. May be NULL: no properties. */
 	knurbs_properties_t *(*properties)(void *param, const knurbs_data_t *settings);
 	/* Passed to every callback. */
 	void *param;

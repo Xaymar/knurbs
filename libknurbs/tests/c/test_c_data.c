@@ -253,6 +253,73 @@ static void count_free(void *param)
 	g_frees++;
 }
 
+/* Every read-only function takes a const handle, as a properties callback gets one (knurbs_type_info.properties). */
+static void test_c_data_const_handles(void **state)
+{
+	(void)state;
+	knurbs_data_t *data = NULL;
+	knurbs_data_t *inner = NULL;
+	knurbs_data_array_t *array = NULL;
+	assert_int_equal(knurbs_data_create(&data), KNURBS_OK);
+	assert_int_equal(knurbs_data_create(&inner), KNURBS_OK);
+	assert_int_equal(knurbs_data_array_create(&array), KNURBS_OK);
+	assert_int_equal(knurbs_data_array_push_back(array, inner), KNURBS_OK);
+	assert_int_equal(knurbs_data_set_bool(data, "on", true), KNURBS_OK);
+	assert_int_equal(knurbs_data_set_int(data, "count", 3), KNURBS_OK);
+	assert_int_equal(knurbs_data_set_double(data, "ratio", 0.5), KNURBS_OK);
+	assert_int_equal(knurbs_data_set_string(data, "name", "x"), KNURBS_OK);
+	assert_int_equal(knurbs_data_set_object(data, "inner", inner), KNURBS_OK);
+	assert_int_equal(knurbs_data_set_array(data, "list", array), KNURBS_OK);
+
+	const knurbs_data_t *ro = data;
+	const knurbs_data_array_t *ro_array = array;
+	bool flag = false;
+	int64_t count = 0;
+	double ratio = 0;
+	char *text = NULL;
+	knurbs_data_t *object = NULL;
+	knurbs_data_array_t *list = NULL;
+	char **keys = NULL;
+	size_t n = 0;
+	assert_int_equal(knurbs_data_has(ro, "on", &flag), KNURBS_OK);
+	assert_true(flag);
+	assert_int_equal(knurbs_data_has_user_value(ro, "on", &flag), KNURBS_OK);
+	assert_true(flag);
+	assert_int_equal(knurbs_data_get_bool(ro, "on", &flag), KNURBS_OK);
+	assert_true(flag);
+	assert_int_equal(knurbs_data_get_int(ro, "count", &count), KNURBS_OK);
+	assert_int_equal(count, 3);
+	assert_int_equal(knurbs_data_get_double(ro, "ratio", &ratio), KNURBS_OK);
+	assert_true(ratio == 0.5);
+	assert_int_equal(knurbs_data_get_string(ro, "name", &text), KNURBS_OK);
+	assert_string_equal(text, "x");
+	knurbs_free(text);
+	assert_int_equal(knurbs_data_to_json(ro, false, &text), KNURBS_OK);
+	assert_non_null(text);
+	knurbs_free(text);
+	assert_int_equal(knurbs_data_keys(ro, &keys, &n), KNURBS_OK);
+	assert_int_equal(n, 6);
+	knurbs_free(keys);
+	assert_int_equal(knurbs_data_get_object(ro, "inner", &object), KNURBS_OK);
+	assert_ptr_equal(object, inner);
+	knurbs_release((knurbs_object_t *)object);
+	assert_int_equal(knurbs_data_get_array(ro, "list", &list), KNURBS_OK);
+	assert_ptr_equal(list, array);
+	knurbs_release((knurbs_object_t *)list);
+	assert_int_equal(knurbs_data_clone(ro, &object), KNURBS_OK);
+	assert_non_null(object);
+	knurbs_release((knurbs_object_t *)object);
+	assert_int_equal(knurbs_data_array_size(ro_array, &n), KNURBS_OK);
+	assert_int_equal(n, 1);
+	assert_int_equal(knurbs_data_array_at(ro_array, 0, &object), KNURBS_OK);
+	assert_ptr_equal(object, inner);
+	knurbs_release((knurbs_object_t *)object);
+
+	knurbs_release((knurbs_object_t *)array);
+	knurbs_release((knurbs_object_t *)inner);
+	knurbs_release((knurbs_object_t *)data);
+}
+
 static void test_c_properties_callback(void **state)
 {
 	(void)state;
@@ -450,9 +517,13 @@ static void test_c_properties_button_and_list(void **state)
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_c_data_roundtrip),         cmocka_unit_test(test_c_data_errors),
-		cmocka_unit_test(test_c_data_defaults_and_keys), cmocka_unit_test(test_c_data_array),
-		cmocka_unit_test(test_c_properties_callback),    cmocka_unit_test(test_c_properties_button_and_list),
+		cmocka_unit_test(test_c_data_roundtrip),
+		cmocka_unit_test(test_c_data_errors),
+		cmocka_unit_test(test_c_data_defaults_and_keys),
+		cmocka_unit_test(test_c_data_array),
+		cmocka_unit_test(test_c_data_const_handles),
+		cmocka_unit_test(test_c_properties_callback),
+		cmocka_unit_test(test_c_properties_button_and_list),
 	};
 	return cmocka_run_group_tests(tests, NULL, NULL);
 }

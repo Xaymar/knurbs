@@ -77,6 +77,17 @@ template<class T, class H> T *c_from_typed_handle(H *handle) noexcept
 	return static_cast<T *>(static_cast<object *>(static_cast<void *>(handle)));
 }
 
+// The read-only forms, for const handles (const knurbs_data_t *) and const objects.
+template<class H> const H *c_to_typed_handle(const object *obj) noexcept
+{
+	return static_cast<const H *>(static_cast<const void *>(obj));
+}
+
+template<class T, class H> const T *c_from_typed_handle(const H *handle) noexcept
+{
+	return static_cast<const T *>(static_cast<const object *>(static_cast<const void *>(handle)));
+}
+
 // Argument checks and memory for the C API. Everything handed to the caller as memory comes from c_malloc and is
 // freed with knurbs_free.
 
@@ -97,6 +108,14 @@ template<class T> T &c_out(T *out, const char *what = "out")
 }
 
 template<class T, class H> T &c_self(H *handle, const char *what = "handle")
+{
+	if (!handle) {
+		c_null_argument(what);
+	}
+	return *c_from_typed_handle<T>(handle);
+}
+
+template<class T, class H> const T &c_self(const H *handle, const char *what = "handle")
 {
 	if (!handle) {
 		c_null_argument(what);
