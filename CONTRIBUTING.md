@@ -5,14 +5,17 @@ Knurbs accepts contributions as pull requests on
 [Xaymar/knurbs](https://github.com/Xaymar/knurbs), against the `root` branch.
 Bugs and feature requests go to the
 [issue tracker](https://github.com/Xaymar/knurbs/issues) there, and security
-issues go through the [security policy](SECURITY.md).
+issues go through the [security policy](SECURITY.md). For questions, help and
+discussion, join the [Knurbs Discord server](https://discord.gg/X2cMgYeA9q).
 
 Knurbs is not OBS Studio. Please do not send Knurbs issues or pull requests to
 the OBS Project, and do not send OBS Studio issues here.
 
 Knurbs is under heavy development and changes direction quickly. If you plan a
 larger change, open an issue first, so we can check that it fits where the
-project is going (see the [README](README.rst)).
+project is going (see the [README](README.rst)). The
+[Discord server](https://discord.gg/X2cMgYeA9q) is a good place to talk it
+through first.
 
 ## What we look for
 

@@ -18,6 +18,13 @@ Knurbs is an independent project. It is not OBS Studio, is not made by or
 affiliated with the OBS Project, and is not supported by it. Please do not
 report Knurbs issues to the OBS Project.
 
+Community
+---------
+
+Questions, help and discussion happen on the
+`Knurbs Discord server <https://discord.gg/X2cMgYeA9q>`_. Bugs and feature
+requests go to the `issue tracker <https://github.com/Xaymar/knurbs/issues>`_.
+
 For now, Knurbs is **not compatible** with anything built for OBS Studio:
 plugins, scripts, themes, profiles, scene collections and other setups are
 not expected to work, and this will likely stay that way for months. Knurbs
