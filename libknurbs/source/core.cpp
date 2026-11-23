@@ -67,6 +67,9 @@ ref<core> core::create(options opts)
 		throw error::invalid_argument("core: cache_path is empty");
 	}
 	ref<log::logger> logger = log::logger::create();
+	if (opts.sink) {
+		logger->add_sink(std::move(opts.sink));
+	}
 	ref<thread::task_queue> destruction_queue = thread::task_queue::create("knurbs-destroy", logger);
 	ref<core> result = make<detail::core_impl>(logger, std::move(destruction_queue));
 	logger->info("knurbs {}.{}.{} core started", version::major, version::minor, version::patch);

@@ -1,18 +1,22 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "knurbs/core.hpp"
 #include "knurbs/error.hpp"
+#include "knurbs/log.hpp"
 #include "knurbs/thread.hpp"
 
 #include "test.hpp"
 
 using knurbs::core;
 using knurbs::ref;
+using knurbs::log::level;
 using knurbs::thread::deferred_object;
 using knurbs::thread::task_queue;
 
@@ -76,6 +80,19 @@ static void test_create_requires_paths(void **)
 	KNURBS_ASSERT_THROWS(core::create(core::options{"", "cache"}), knurbs::error::invalid_argument);
 	KNURBS_ASSERT_THROWS(core::create(core::options{"config", ""}), knurbs::error::invalid_argument);
 	KNURBS_ASSERT_THROWS(core::create(core::options{}), knurbs::error::invalid_argument);
+}
+
+static void test_startup_message_logged(void **)
+{
+	std::vector<std::pair<level, std::string>> got; // written only during create(), on this thread
+	core::options opts = test_options();
+	opts.sink = [&got](level l, std::string_view text) noexcept {
+		got.emplace_back(l, std::string(text));
+	};
+	ref<core> c = core::create(std::move(opts));
+	assert_int_equal(got.size(), 1);
+	assert_true(got[0].first == level::info);
+	assert_string_equal(got[0].second.c_str(), "knurbs 0.1.0 core started");
 }
 
 static void test_two_cores_independent(void **)
@@ -208,6 +225,7 @@ int main()
 	const struct CMUnitTest tests[] = {
 		cmocka_unit_test(test_create_and_shutdown),
 		cmocka_unit_test(test_create_requires_paths),
+		cmocka_unit_test(test_startup_message_logged),
 		cmocka_unit_test(test_two_cores_independent),
 		cmocka_unit_test(test_shutdown_idempotent),
 		cmocka_unit_test(test_last_release_shuts_down),

@@ -37,10 +37,13 @@ public:
 	struct options {
 		std::filesystem::path config_path;
 		std::filesystem::path cache_path;
+		// Attached to the core's logger before create() writes its first message. Empty means none.
+		log::sink sink = {};
 	};
 
-	// Starts a core and logs "knurbs <major>.<minor>.<patch> core started" at level::info to its logger. Throws
-	// error::invalid_argument when config_path or cache_path is empty.
+	// Starts a core: adds opts.sink (if any) to the new logger, then logs
+	// "knurbs <major>.<minor>.<patch> core started" at level::info. Throws error::invalid_argument when
+	// config_path or cache_path is empty.
 	static ref<core> create(options opts);
 
 	ref<log::logger> logger() const;
