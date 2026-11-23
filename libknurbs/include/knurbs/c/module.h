@@ -44,7 +44,8 @@ struct knurbs_module_header {
 #define KNURBS_API_VERSION_MINOR 1
 
 /* A loaded module (knurbs::module), as its C entry points see it. It is an object (see knurbs/c/object.h), owned by
- * the core: an entry point gets it without a reference of its own, valid for as long as the core.
+ * the core: an entry point gets it without a reference of its own, valid for as long as the core. A reference taken
+ * with knurbs_ref keeps the handle valid past the core, but not the core (see knurbs_module_core).
  *
  * A C module uses KNURBS_MODULE_C() once and defines its entry points as
  *     KNURBS_MODULE_EXPORT void knurbs_module_load(knurbs_module_t *m);       (required)
@@ -56,8 +57,11 @@ struct knurbs_module_header {
 typedef struct knurbs_module knurbs_module_t;
 
 /* Returns the core that loaded the module, or NULL for NULL: a borrowed handle, without a reference of its own (like
- * knurbs::module::core()), so do not release it. It is valid for as long as the module handle, which covers every
- * entry point.
+ * knurbs::module::core()), so do not release it. The module handle does not keep the core alive: once the core is
+ * destroyed (its last reference released), this returns NULL with knurbs_last_error set, and knurbs_registry_add
+ * and knurbs_registry_add_alias return KNURBS_ERROR_CORE_GONE. As for knurbs::module::core(), the check is not a
+ * lock: a call that races the core's last release on another thread is not covered. During every entry point the
+ * core is held, so the handle stays valid for the whole call.
  *
  * Do not take a reference to it with knurbs_ref during unload: unload may run inside the shutdown that the core's
  * last knurbs_release started, when the core has no references left (see knurbs_ref). To keep the core, take the

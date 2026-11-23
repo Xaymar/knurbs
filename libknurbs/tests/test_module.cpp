@@ -261,6 +261,24 @@ static void test_unload_on_shutdown(void **)
 	KNURBS_ASSERT_THROWS(c->modules().load({}), knurbs::error::core_gone);
 }
 
+// A module held past its core (a host that keeps its module list in a member declared before its ref<core>) is
+// still valid memory, but the core it points to is gone.
+static void test_module_outlives_core(void **)
+{
+	std::vector<ref<module>> mods;
+	{
+		auto c = make_core();
+		mods = c->modules().load(c->modules().discover({modules_dir()}));
+	}
+	const ref<module> &ok = by_name(mods, "fake-ok");
+	assert_true(ok->name() == "fake-ok");
+	assert_false(ok->failed());
+	assert_true(static_cast<bool>(ok->logger()));
+	KNURBS_ASSERT_THROWS(ok->core(), knurbs::error::core_gone);
+	KNURBS_ASSERT_THROWS(ok->registry(), knurbs::error::core_gone);
+	KNURBS_ASSERT_THROWS(ok->registry().find("com.example.fake.ok"), knurbs::error::core_gone);
+}
+
 static void test_unload_all_runs_once(void **)
 {
 	auto c = make_core();
@@ -544,6 +562,30 @@ static void test_c_registry_add_alias(void **)
 	assert_false(static_cast<bool>(c->registry().find("fake_ok_old")));
 }
 
+// The same through the C API: a module handle that a C module (or host) kept with knurbs_ref.
+static void test_c_module_outlives_core(void **)
+{
+	knurbs_module_t *m = nullptr;
+	{
+		auto c = make_core();
+		auto mods = c->modules().load(c->modules().discover({modules_dir()}));
+		m = c_handle(by_name(mods, "fake-c"));
+		knurbs_ref(reinterpret_cast<knurbs_object_t *>(m));
+	}
+
+	assert_null(knurbs_module_core(m));
+	assert_true(std::string_view(knurbs_last_error()).find("gone") != std::string_view::npos);
+
+	// The library still owns param: it is freed at once.
+	int freed = 0;
+	auto info = make_type_info("com.example.c.late", &freed);
+	assert_int_equal(knurbs_registry_add(m, &info), KNURBS_ERROR_CORE_GONE);
+	assert_int_equal(freed, 1);
+	assert_int_equal(knurbs_registry_add_alias(m, "c_late_old", "com.example.fake.c"), KNURBS_ERROR_CORE_GONE);
+
+	knurbs_release(reinterpret_cast<knurbs_object_t *>(m));
+}
+
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
@@ -555,6 +597,7 @@ int main(void)
 		cmocka_unit_test_setup_teardown(test_reject_other_major, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_reject_c_other_major, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_unload_on_shutdown, remove_markers, remove_markers),
+		cmocka_unit_test_setup_teardown(test_module_outlives_core, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_unload_all_runs_once, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_duplicate_name_fails, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_two_cores_do_not_interfere, remove_markers, remove_markers),
@@ -562,6 +605,7 @@ int main(void)
 		cmocka_unit_test_setup_teardown(test_c_registry_add_checks_info, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_c_registry_optional_callbacks, remove_markers, remove_markers),
 		cmocka_unit_test_setup_teardown(test_c_registry_add_alias, remove_markers, remove_markers),
+		cmocka_unit_test_setup_teardown(test_c_module_outlives_core, remove_markers, remove_markers),
 	};
 	return cmocka_run_group_tests(tests, nullptr, nullptr);
 }

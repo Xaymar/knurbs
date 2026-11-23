@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "core-impl.hpp"
+#include "knurbs/error.hpp"
 #include "module-loader.hpp"
 
 namespace knurbs {
@@ -10,7 +11,7 @@ namespace knurbs {
 namespace detail {
 
 module_impl::module_impl(core_impl &c, module_manager::found f)
-	: core_(c),
+	: core_(&c),
 	  logger_(c.logger()),
 	  name_(std::move(f.name)),
 	  binary_(std::move(f.binary)),
@@ -36,14 +37,27 @@ const std::filesystem::path &module::data_path() const noexcept
 	return static_cast<const detail::module_impl *>(this)->data_;
 }
 
+namespace {
+
+detail::core_impl &live_core(const detail::module_impl &m)
+{
+	detail::core_impl *c = m.core_.load(std::memory_order_acquire);
+	if (!c) {
+		throw error::core_gone("module: the core that loaded it is gone");
+	}
+	return *c;
+}
+
+} // namespace
+
 core &module::core() const
 {
-	return static_cast<const detail::module_impl *>(this)->core_;
+	return live_core(*static_cast<const detail::module_impl *>(this));
 }
 
 registry &module::registry() const
 {
-	return static_cast<const detail::module_impl *>(this)->core_.registry();
+	return live_core(*static_cast<const detail::module_impl *>(this)).registry();
 }
 
 ref<log::logger> module::logger() const

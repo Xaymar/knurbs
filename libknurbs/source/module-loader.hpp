@@ -40,7 +40,9 @@ class module_impl final : public module {
 public:
 	module_impl(core_impl &c, module_manager::found f);
 
-	core_impl &core_;
+	// The core that loaded the module, until that core is destroyed (module_manager_impl::detach_modules), then
+	// nullptr. The module does not keep the core alive.
+	std::atomic<core_impl *> core_;
 	const ref<log::logger> logger_;
 	const std::string name_;
 	const std::filesystem::path binary_;
@@ -90,6 +92,10 @@ class module_manager_impl final : public module_manager {
 
 public:
 	explicit module_manager_impl(core_impl &c) noexcept : core_(c) {}
+
+	// Tells every module the core is being destroyed: from then on module::core() and module::registry() throw
+	// error::core_gone. Called from the core's destructor.
+	void detach_modules() noexcept;
 
 	std::vector<found> discover(const std::vector<std::filesystem::path> &search_dirs) const;
 	std::vector<ref<module>> load(const std::vector<found> &modules);

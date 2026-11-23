@@ -65,7 +65,8 @@ struct knurbs_type_info {
  * free_param cannot be read then; that call is KNURBS_ERROR_INVALID_ARGUMENT and leaves `param` with the caller.
  *
  * KNURBS_ERROR_INVALID_ARGUMENT also for a NULL module or id, an unknown kind, or an id that is not a valid type ID;
- * KNURBS_ERROR_ALREADY_EXISTS when the id is already registered or is the old ID of an alias. */
+ * KNURBS_ERROR_ALREADY_EXISTS when the id is already registered or is the old ID of an alias; KNURBS_ERROR_CORE_GONE
+ * once the core is shutting down or destroyed (see knurbs_module_core). */
 KNURBS_C_API knurbs_result knurbs_registry_add(knurbs_module_t *module, const struct knurbs_type_info *info);
 
 /* Makes `old_id` find the type `new_id` (knurbs::registry::add_alias), owned by `module` as for

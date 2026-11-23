@@ -17,7 +17,11 @@ core_impl::core_impl(ref<log::logger> logger, ref<thread::task_queue> destructio
 {
 }
 
-core_impl::~core_impl() = default;
+core_impl::~core_impl()
+{
+	// First, so a module held past the core sees core_gone instead of the freed core (see module::core()).
+	modules_.detach_modules();
+}
 
 void core_impl::shutdown() noexcept
 {

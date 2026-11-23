@@ -58,9 +58,15 @@ public:
 	// The module's data directory, <dir>/<name>/data. It need not exist.
 	const std::filesystem::path &data_path() const noexcept;
 
-	// The core that loaded the module. The module does not keep it alive: only call these while the core is
-	// held, as it is during every entry point. Do not make a ref<core> from it during unload: unload may run inside
-	// the shutdown that the core's last release started, when it has no references left (see object::acquire).
+	// The core that loaded the module. The module does not keep it alive: once the core is destroyed (its last
+	// reference released), these throw error::core_gone. Do not make a ref<core> from it during unload: unload
+	// may run inside the shutdown that the core's last release started, when it has no references left (see
+	// object::acquire).
+	//
+	// The check is not a lock. A call made on one thread while another releases the core's last reference may
+	// still get the core just before it is freed, so the release must happen before such a call (the thread that
+	// released it, or one synchronised with it). Calls made while the core is held, as it is during every entry
+	// point, always get a live core.
 	class core &core() const;
 	// The core's registry. A type or alias that the module adds with an empty `owner_module` is recorded as this
 	// module's (removed with registry::remove_module(name())) only while one of the module's entry points runs,

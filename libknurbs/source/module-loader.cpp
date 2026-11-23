@@ -122,7 +122,7 @@ current_module_scope::~current_module_scope()
 std::string_view current_module_name(const core &c) noexcept
 {
 	// Only a module of the same core counts: two cores never interfere.
-	if (current_module && &current_module->core_ == &c) {
+	if (current_module && current_module->core_.load(std::memory_order_acquire) == &c) {
 		return current_module->name_;
 	}
 	return {};
@@ -286,6 +286,14 @@ std::vector<ref<module>> module_manager_impl::load(const std::vector<found> &mod
 	run_each(to_post_load, [](module_impl &m) { m.post_load_(m); }, true);
 
 	return {batch.begin(), batch.end()};
+}
+
+void module_manager_impl::detach_modules() noexcept
+{
+	std::scoped_lock lock(mutex_);
+	for (const ref<module_impl> &m : modules_) {
+		m->core_.store(nullptr, std::memory_order_release);
+	}
 }
 
 void module_manager_impl::unload_all() noexcept
