@@ -1,4 +1,5 @@
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -11,6 +12,10 @@ using knurbs::log::logger;
 using knurbs::ref;
 
 namespace {
+
+// Like every other core class, logger cannot be subclassed: its methods cast to the library's own implementation.
+struct plugin_logger : logger {};
+static_assert(!std::is_default_constructible_v<plugin_logger>);
 
 using record = std::pair<level, std::string>;
 

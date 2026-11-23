@@ -18,10 +18,15 @@ enum class level : std::uint8_t { debug, info, warning, error };
 // Receives every message written to the logger it was added to. Called without any logger lock held.
 using sink = std::move_only_function<void(level, std::string_view) noexcept>;
 
+namespace detail {
+class logger_impl;
+} // namespace detail
+
 // Delivers messages to its sinks. Thread-safe. Two loggers never share sinks or state.
 class KNURBS_API logger : public object {
-protected:
+	// Only created by create(); not meant to be subclassed.
 	logger() noexcept = default;
+	friend class detail::logger_impl;
 
 public:
 	static ref<logger> create();
