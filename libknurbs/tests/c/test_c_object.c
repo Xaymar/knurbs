@@ -46,6 +46,19 @@ static void test_c_error_mapping(void **state)
 	assert_true(strlen(knurbs_last_error()) > 0);
 }
 
+static void test_c_core_create_clears_out(void **state)
+{
+	(void)state;
+	int marker = 0;
+	knurbs_core_t *out = (knurbs_core_t *)(void *)&marker;
+	assert_int_equal(knurbs_core_create("", "", &out), KNURBS_ERROR_INVALID_ARGUMENT);
+	assert_null(out);
+
+	out = (knurbs_core_t *)(void *)&marker;
+	assert_int_equal(knurbs_core_create(NULL, "cache", &out), KNURBS_ERROR_INVALID_ARGUMENT);
+	assert_null(out);
+}
+
 static void test_c_null_and_levels(void **state)
 {
 	(void)state;
@@ -95,6 +108,7 @@ int main(void)
 	const struct CMUnitTest tests[] = {
 		cmocka_unit_test(test_c_core_lifecycle),
 		cmocka_unit_test(test_c_error_mapping),
+		cmocka_unit_test(test_c_core_create_clears_out),
 		cmocka_unit_test(test_c_null_and_levels),
 		cmocka_unit_test(test_c_weak),
 	};

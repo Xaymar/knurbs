@@ -14,6 +14,9 @@ extern "C" {
 
 knurbs_result knurbs_core_create(const char *config_path_utf8, const char *cache_path_utf8, knurbs_core_t **out)
 {
+	if (out) {
+		*out = nullptr;
+	}
 	return detail::c_guard([&] {
 		if (!out || !config_path_utf8 || !cache_path_utf8) {
 			throw error::invalid_argument(
