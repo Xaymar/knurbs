@@ -152,6 +152,24 @@ static void conversion_test(void **state)
 	n = os_wcs_to_mbs(L"\x20ac", 0, back, 16);
 	assert_int_equal(strlen(back), n);
 
+	/* Regression: a result that filled the destination wrote its terminator one past the end */
+	struct {
+		wchar_t text[3];
+		wchar_t guard;
+	} wbuf = {{0}, L'G'};
+	struct {
+		char text[3];
+		char guard;
+	} cbuf = {{0}, 'G'};
+	n = os_utf8_to_wcs("abc", 0, wbuf.text, 3);
+	assert_true(n < 3 && wcslen(wbuf.text) == n && wbuf.guard == L'G');
+	n = os_mbs_to_wcs("abc", 0, wbuf.text, 3);
+	assert_true(n < 3 && wcslen(wbuf.text) == n && wbuf.guard == L'G');
+	n = os_wcs_to_utf8(L"abc", 0, cbuf.text, 3);
+	assert_true(n < 3 && strlen(cbuf.text) == n && cbuf.guard == 'G');
+	n = os_wcs_to_mbs(L"abc", 0, cbuf.text, 3);
+	assert_true(n < 3 && strlen(cbuf.text) == n && cbuf.guard == 'G');
+
 	assert_int_equal(os_mbs_to_wcs("abc", 0, wide, 16), 3);
 	assert_int_equal(os_wcs_to_mbs(L"abc", 0, back, 16), 3);
 	assert_string_equal(back, "abc");
