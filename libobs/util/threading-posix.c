@@ -235,13 +235,15 @@ struct os_sem_data {
 
 int os_sem_init(os_sem_t **sem, int value)
 {
-	sem_t new_sem;
-	int ret = sem_init(&new_sem, 0, value);
-	if (ret != 0)
+	/* a sem_t must be used where sem_init() put it: POSIX leaves a copy of one undefined */
+	struct os_sem_data *data = bzalloc(sizeof(struct os_sem_data));
+	int ret = sem_init(&data->sem, 0, value);
+	if (ret != 0) {
+		bfree(data);
 		return ret;
+	}
 
-	*sem = bzalloc(sizeof(struct os_sem_data));
-	(*sem)->sem = new_sem;
+	*sem = data;
 	return 0;
 }
 
