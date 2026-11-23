@@ -216,7 +216,6 @@ struct amf_texencode : amf_base, public AMFSurfaceObserver {
 	bool vulkan = false;
 #ifdef ENABLE_AMF_VULKAN
 	std::unique_ptr<amf_vulkan> vk;
-	std::unordered_map<AMFSurface *, uint64_t> vk_active; /* release values, under textures_mutex */
 #endif
 
 	inline amf_texencode() : amf_base(false) {}
@@ -251,16 +250,10 @@ struct amf_texencode : amf_base, public AMFSurfaceObserver {
 
 		std::scoped_lock lock(textures_mutex);
 
-#ifdef ENABLE_AMF_VULKAN
+		/* Vulkan: AMF's surfaces are kept and resubmitted, so this never fires for them (amf_vulkan::collect) */
 		if (vulkan) {
-			auto it = vk_active.find(surf);
-			if (it != vk_active.end()) {
-				vk->released(it->second);
-				vk_active.erase(it);
-			}
 			return;
 		}
-#endif
 
 		auto it = active_textures.find(surf);
 		if (it != active_textures.end()) {
@@ -988,8 +981,8 @@ try {
 	return false;
 }
 
-/* Vulkan: the frame is imported once per libobs image and wrapped as an AMF surface (zero copy). libobs takes the
- * frame back once AMF released the surface (OnSurfaceDataRelease signals the release timeline). */
+/* Vulkan: each libobs image is imported once and has its own AMF surface, resubmitted every time (zero copy). libobs
+ * takes a frame back once AMF gave its surface back (amf_vulkan::collect signals the release timeline). */
 static bool amf_encode_tex2(void *data, struct encoder_texture *texture, int64_t pts, uint64_t lock_key,
 			    uint64_t *next_key, encoder_packet *packet, bool *received_packet)
 {
@@ -1004,25 +997,14 @@ static bool amf_encode_tex2(void *data, struct encoder_texture *texture, int64_t
 		if (!texture->shared) {
 			throw "libobs gave no shared frame";
 		}
-		AMFVulkanSurface *native = enc->vk->surface(*texture->shared);
-
 		AMFContext1Ptr context1(enc->amf_context);
-		AMFSurfacePtr amf_surf;
-		AMF_RESULT res = context1->CreateSurfaceFromVulkanNative(native, &amf_surf, enc);
-		if (res != AMF_OK) {
-			throw amf_error("CreateSurfaceFromVulkanNative failed", res);
-		}
+		AMFSurface *amf_surf = enc->vk->surface(*texture->shared, context1);
 
 		amf_surf->SetPts(convert_to_amf_ts(enc, pts));
 		amf_surf->SetProperty(L"PTS", pts);
 
-		enc->vk->hold(texture->shared->release_value);
-		{
-			std::scoped_lock lock(enc->textures_mutex);
-			enc->vk_active[amf_surf.GetPtr()] = texture->shared->release_value;
-		}
-
 		amf_encode_base(enc, amf_surf, packet, received_packet);
+		enc->vk->collect(); /* the inputs of the packets just received */
 		return true;
 
 	} catch (const char *err) {

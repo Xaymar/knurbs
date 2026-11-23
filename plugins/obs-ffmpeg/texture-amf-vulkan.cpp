@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <vulkan/vulkan.h>
 
+#include <AMF/core/Context.h>
 #include <AMF/core/Surface.h>
 #include <AMF/core/VulkanAMF.h>
 
@@ -17,6 +18,7 @@
 #include <mutex>
 #include <set>
 #include <unordered_map>
+#include <vector>
 
 #define LOG_PREFIX "[texture-amf-vulkan] "
 
@@ -40,7 +42,7 @@ namespace {
 	X(vkDeviceWaitIdle) X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements2)         \
 		X(vkAllocateMemory) X(vkFreeMemory) X(vkBindImageMemory) X(vkCreateSemaphore)           \
 			X(vkDestroySemaphore) X(vkImportSemaphoreWin32HandleKHR) X(vkWaitSemaphores) \
-				X(vkSignalSemaphore)
+				X(vkSignalSemaphore) X(vkWaitForFences)
 
 struct vk_fns {
 	HMODULE lib = nullptr;
@@ -74,10 +76,27 @@ VKAPI_ATTR VkBool32 VKAPI_CALL on_message(VkDebugUtilsMessageSeverityFlagBitsEXT
 
 /* ------------------------------------------------------------------------- */
 
+/* One AMFSurface of an image, made once and resubmitted (see the header). */
+struct wrap {
+	amf::AMFVulkanSurface desc = {}; // what CreateSurfaceFromVulkanNative was given; lives as long as the surface
+	amf::AMFSurfacePtr surf;
+	amf::AMFVulkanSurface *native = nullptr; // AMF's description of the image for this surface (layout, sync)
+	bool held = false;                       // submitted, and AMF has not given it back yet
+	uint64_t release_value = 0, generation = 0;
+};
+
+/* AMF holds a reference to a surface while it uses it; this code holds exactly one. */
+static bool amf_holds(amf::AMFSurface *s)
+{
+	s->Acquire();
+	return s->Release() > 1;
+}
+
 struct amf_vulkan::frame {
 	VkImage image = VK_NULL_HANDLE;
 	VkDeviceMemory memory = VK_NULL_HANDLE;
-	amf::AMFVulkanSurface surface = {};
+	amf::AMFVulkanSurface desc = {};
+	std::vector<std::unique_ptr<wrap>> wraps; // usually one; more only while AMF holds a repeated frame
 };
 
 struct amf_vulkan::impl {
@@ -94,10 +113,109 @@ struct amf_vulkan::impl {
 	void *ready_handle = nullptr, *release_handle = nullptr;
 
 	std::map<uint64_t, frame> frames; // by tex_id
+	std::vector<frame> retired;       // of an earlier frame pool, destroyed once AMF gave their surfaces back
+	std::vector<wrap *> in_flight;    // held surfaces, in submission order
 
-	std::mutex hold_mutex; // AMF releases surfaces from its own threads
+	std::mutex hold_mutex;
 	std::multiset<uint64_t> held;
 	uint64_t highest_held = 0, signalled = 0;
+	uint64_t generation = 0; // of the release timeline: values of an earlier one are not signalled
+
+	bool logged_sync = false;
+
+	// Test hooks (test_vulkan_gpu_encode). OBS_AMF_VULKAN_TEST_HOLD=N keeps the last N surfaces AMF gave back held
+	// a while longer, so libobs grows its frame pool and AMF keeps getting images it has not seen: the case in which
+	// AMF's cache went wrong most. OBS_AMF_VULKAN_TEST_WRAP_EACH_FRAME=1 wraps the image anew for every frame, as
+	// before the fix, to show that the test still catches the bug.
+	int test_hold = 0;
+	bool test_wrap_each_frame = false;
+	std::vector<wrap *> delayed; // given back by AMF, released later (test_hold)
+
+	void hold(uint64_t release_value)
+	{
+		std::scoped_lock lock(hold_mutex);
+		held.insert(release_value);
+		highest_held = std::max(highest_held, release_value);
+	}
+
+	void released(uint64_t release_value)
+	{
+		std::scoped_lock lock(hold_mutex);
+		auto it = held.find(release_value);
+		if (it != held.end()) {
+			held.erase(it);
+		}
+		// Values only increase: signal up to just below the oldest frame still held.
+		signal(held.empty() ? highest_held : *held.begin() - 1);
+	}
+
+	// AMF gave the surface back: its GPU work on the image is waited for (where AMF says how), then the frame is
+	// released to libobs.
+	void given_back(wrap &w)
+	{
+		amf::AMFVulkanSurface *n = w.native;
+		if (n && !logged_sync) {
+			logged_sync = true;
+			blog(LOG_DEBUG, LOG_PREFIX "AMF gave a surface back: layout %u, semaphore %p (%s), fence %p",
+			     n->eCurrentLayout, (void *)n->Sync.hSemaphore, n->Sync.bSubmitted ? "submitted" : "not submitted",
+			     (void *)n->Sync.hFence);
+		}
+		if (n && n->Sync.hFence) {
+			// "If waited for hFence, null it, do not delete or reset."
+			if (f.vkWaitForFences(dev, 1, &n->Sync.hFence, VK_TRUE, 5000000000ull) != VK_SUCCESS) {
+				blog(LOG_WARNING, LOG_PREFIX "AMF's fence of a surface did not signal");
+			}
+			n->Sync.hFence = VK_NULL_HANDLE;
+		}
+		w.held = false;
+		if (w.generation == generation) {
+			released(w.release_value);
+		}
+	}
+
+	void collect()
+	{
+		auto busy = [](wrap *w) {
+			return amf_holds(w->surf);
+		};
+		for (size_t i = 0; i < in_flight.size();) {
+			wrap *w = in_flight[i];
+			if (busy(w)) {
+				++i;
+				continue;
+			}
+			in_flight.erase(in_flight.begin() + (ptrdiff_t)i);
+			if (test_hold) {
+				delayed.push_back(w);
+			} else {
+				given_back(*w);
+			}
+		}
+		while (delayed.size() > (size_t)test_hold) {
+			given_back(*delayed.front());
+			delayed.erase(delayed.begin());
+		}
+		for (size_t i = 0; i < retired.size();) {
+			frame &fr = retired[i];
+			if (std::any_of(fr.wraps.begin(), fr.wraps.end(), [](const std::unique_ptr<wrap> &w) {
+				    return w->held;
+			    })) {
+				++i;
+				continue;
+			}
+			destroy_frame(fr);
+			retired.erase(retired.begin() + (ptrdiff_t)i);
+		}
+	}
+
+	// A new frame pool: the images of the old one are no longer libobs's frames (their ids may come again).
+	void retire_frames()
+	{
+		for (auto &it : frames) {
+			retired.push_back(std::move(it.second));
+		}
+		frames.clear();
+	}
 
 	void signal(uint64_t value)
 	{
@@ -136,6 +254,7 @@ struct amf_vulkan::impl {
 
 	void destroy_frame(frame &fr)
 	{
+		fr.wraps.clear(); // the surfaces first: AMF's import of the image goes with them
 		if (fr.image) {
 			f.vkDestroyImage(dev, fr.image, nullptr);
 		}
@@ -172,6 +291,16 @@ amf_vulkan::amf_vulkan(const std::vector<const char *> &extensions, bool p010) :
 {
 	vk_fns &f = d->f;
 	d->p010 = p010;
+	if (const char *hold = getenv("OBS_AMF_VULKAN_TEST_HOLD")) {
+		d->test_hold = std::max(0, atoi(hold));
+	}
+	if (const char *each = getenv("OBS_AMF_VULKAN_TEST_WRAP_EACH_FRAME")) {
+		d->test_wrap_each_frame = strcmp(each, "1") == 0;
+	}
+	if (d->test_hold || d->test_wrap_each_frame) {
+		blog(LOG_WARNING, LOG_PREFIX "test hooks: hold %d, wrap each frame %d", d->test_hold,
+		     (int)d->test_wrap_each_frame);
+	}
 	if (!load(f)) {
 		throw "Cannot load vulkan-1.dll";
 	}
@@ -350,8 +479,12 @@ amf_vulkan::~amf_vulkan()
 	if (d->dev) {
 		release_all();
 		f.vkDeviceWaitIdle(d->dev);
+		d->in_flight.clear();
 		for (auto &it : d->frames) {
 			d->destroy_frame(it.second);
+		}
+		for (frame &fr : d->retired) {
+			d->destroy_frame(fr);
 		}
 		if (d->ready) {
 			f.vkDestroySemaphore(d->dev, d->ready, nullptr);
@@ -386,7 +519,7 @@ uint32_t amf_vulkan::vendor_id() const
 	return d->vendor;
 }
 
-amf::AMFVulkanSurface *amf_vulkan::surface(const encoder_texture_shared &shared)
+amf::AMFSurface *amf_vulkan::surface(const encoder_texture_shared &shared, amf::AMFContext1 *context)
 {
 	vk_fns &f = d->f;
 	if (shared.tex.type != GS_HANDLE_WIN32 || !shared.tex.win32 || !shared.tex_id) {
@@ -396,10 +529,13 @@ amf::AMFVulkanSurface *amf_vulkan::surface(const encoder_texture_shared &shared)
 		throw "libobs gave no NT timeline handles";
 	}
 
-	// Timelines: imported once (libobs keeps the same ones for the life of the frame pool).
+	// Timelines: imported once (libobs keeps the same ones for the life of the frame pool). Another ready timeline
+	// is another pool: its images are new ones, and its ids may be the old pool's.
 	if (d->ready_handle != shared.ready.win32) {
 		if (d->ready) {
 			f.vkDestroySemaphore(d->dev, d->ready, nullptr);
+			d->retire_frames();
+			blog(LOG_INFO, LOG_PREFIX "new frame pool: %zu images retired", d->retired.size());
 		}
 		d->ready = d->import_timeline(shared.ready.win32);
 		d->ready_handle = d->ready ? shared.ready.win32 : nullptr;
@@ -414,6 +550,10 @@ amf::AMFVulkanSurface *amf_vulkan::surface(const encoder_texture_shared &shared)
 		}
 		d->release = d->import_timeline(shared.release.win32);
 		d->release_handle = d->release ? shared.release.win32 : nullptr;
+		// The frames held so far were the old timeline's.
+		d->held.clear();
+		d->highest_held = d->signalled = 0;
+		++d->generation;
 		if (!d->release) {
 			throw "Cannot import the release timeline";
 		}
@@ -491,7 +631,7 @@ amf::AMFVulkanSurface *amf_vulkan::surface(const encoder_texture_shared &shared)
 			throw "Cannot import the frame's memory";
 		}
 
-		amf::AMFVulkanSurface &s = fr.surface;
+		amf::AMFVulkanSurface &s = fr.desc;
 		s.cbSizeof = sizeof(s);
 		s.hImage = fr.image;
 		s.hMemory = fr.memory;
@@ -520,36 +660,66 @@ amf::AMFVulkanSurface *amf_vulkan::surface(const encoder_texture_shared &shared)
 		throw r == VK_TIMEOUT ? "Timed out waiting for libobs's frame" : "vkWaitSemaphores failed";
 	}
 
-	// AMF records its layout transitions from here; no semaphore to wait for.
-	fr.surface.eCurrentLayout = VK_IMAGE_LAYOUT_GENERAL;
-	fr.surface.Sync.hSemaphore = VK_NULL_HANDLE;
-	fr.surface.Sync.bSubmitted = false;
-	fr.surface.Sync.hFence = VK_NULL_HANDLE;
-	return &fr.surface;
-}
-
-void amf_vulkan::hold(uint64_t release_value)
-{
-	std::scoped_lock lock(d->hold_mutex);
-	d->held.insert(release_value);
-	d->highest_held = std::max(d->highest_held, release_value);
-}
-
-void amf_vulkan::released(uint64_t release_value)
-{
-	std::scoped_lock lock(d->hold_mutex);
-	auto it = d->held.find(release_value);
-	if (it != d->held.end()) {
-		d->held.erase(it);
+	// A surface of this image that AMF gave back, else a new one (the image's first use, or a repeated frame while
+	// AMF still holds the other surfaces); kept for the life of the image.
+	d->collect();
+	if (d->test_wrap_each_frame) {
+		fr.wraps.erase(std::remove_if(fr.wraps.begin(), fr.wraps.end(),
+					      [](const std::unique_ptr<wrap> &x) { return !x->held; }),
+			       fr.wraps.end());
 	}
-	// Values only increase: signal up to just below the oldest frame still held.
-	d->signal(d->held.empty() ? d->highest_held : *d->held.begin() - 1);
+	wrap *w = nullptr;
+	for (auto &x : fr.wraps) {
+		if (!x->held) {
+			w = x.get();
+			break;
+		}
+	}
+	if (w) {
+		// What the last encode set on it (forced picture type, ROI map, PTS) does not carry over.
+		w->surf->Clear();
+	} else {
+		auto nw = std::make_unique<wrap>();
+		nw->desc = fr.desc;
+		nw->desc.eCurrentLayout = VK_IMAGE_LAYOUT_GENERAL;
+		nw->desc.Sync = {};
+		nw->desc.Sync.cbSizeof = sizeof(nw->desc.Sync);
+		AMF_RESULT res = context->CreateSurfaceFromVulkanNative(&nw->desc, &nw->surf, nullptr);
+		if (res != AMF_OK || !nw->surf) {
+			throw "CreateSurfaceFromVulkanNative failed";
+		}
+		amf::AMFPlane *plane = nw->surf->GetPlaneAt(0);
+		auto *view = plane ? (amf::AMFVulkanView *)plane->GetNative() : nullptr;
+		nw->native = view && view->pSurface ? view->pSurface : &nw->desc;
+		w = nw.get();
+		fr.wraps.push_back(std::move(nw));
+		blog(LOG_DEBUG, LOG_PREFIX "frame %llu: surface %zu created", (unsigned long long)shared.tex_id,
+		     fr.wraps.size());
+	}
+
+	// libobs hands its images over in GENERAL (whatever layout AMF left the image in, libobs's own use since then
+	// ended in GENERAL). A semaphore AMF left submitted stays: AMF waits for it on its next use of the surface.
+	w->native->eCurrentLayout = VK_IMAGE_LAYOUT_GENERAL;
+	w->native->Sync.hFence = VK_NULL_HANDLE;
+
+	w->held = true;
+	w->release_value = shared.release_value;
+	w->generation = d->generation;
+	d->hold(shared.release_value);
+	d->in_flight.push_back(w);
+	return w->surf;
+}
+
+void amf_vulkan::collect()
+{
+	d->collect();
 }
 
 void amf_vulkan::release_all()
 {
 	std::scoped_lock lock(d->hold_mutex);
 	d->held.clear();
+	d->delayed.clear();
 	d->signal(d->highest_held);
 }
 

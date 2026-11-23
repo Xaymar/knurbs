@@ -459,17 +459,19 @@ if(ENABLE_VULKAN)
       _gpu_encode_test(amf_h264 *amd-vulkan64* obs-ffmpeg h264_texture_amf nv12 rate_control=CQP cqp=20)
       _gpu_encode_test(amf_hevc_p010 *amd-vulkan64* obs-ffmpeg h265_texture_amf p010 rate_control=CQP cqp=20)
       _gpu_encode_test(amf_h264_repeat *amd-vulkan64* obs-ffmpeg h264_texture_amf nv12 rate_control=CQP cqp=20 stall=10)
-      # AMF's Vulkan texture path is opt-in (texture-amf.cpp amf_init_texture): AMF (Adrenalin 26.11.2, Radeon 780M)
-      # now and then encodes the picture of an earlier input instead of the one it was given, more often after a
-      # stalled render. These tests show it (docs/graphics-interop.md, Driver issues) and are disabled until it is
-      # fixed; run them with ctest -R gpu_encode_amf after removing the DISABLED property, or the executable directly.
+      # AMF's stale frames (docs/graphics-interop.md, Driver issues): given a new AMFSurface for an image, AMF now and
+      # then encodes the picture of an earlier one, so the encoder wraps each image once. With the code from before
+      # that (OBS_AMF_VULKAN_TEST_WRAP_EACH_FRAME=1) the three tests above fail every run. This one covers many
+      # images: the encoder keeps 76 frames held longer (OBS_AMF_VULKAN_TEST_HOLD), so libobs's frame pool grows to
+      # its limit of 80 and two thirds of the frames come in images AMF has not seen yet (4 of 5 runs fail without
+      # the fix).
+      _gpu_encode_test(amf_h264_fresh_images *amd-vulkan64* obs-ffmpeg h264_texture_amf nv12 rate_control=CQP cqp=20)
+      set_property(TEST test_vulkan_gpu_encode_amf_h264_fresh_images APPEND PROPERTY ENVIRONMENT "OBS_AMF_VULKAN_TEST_HOLD=76")
+      # AMF's Vulkan texture path is opt-in (texture-amf.cpp amf_init_texture).
       set_property(
         TEST test_vulkan_gpu_encode_amf_h264 test_vulkan_gpu_encode_amf_hevc_p010 test_vulkan_gpu_encode_amf_h264_repeat
+             test_vulkan_gpu_encode_amf_h264_fresh_images
         APPEND PROPERTY ENVIRONMENT "OBS_AMF_VULKAN_TEXTURE=1"
-      )
-      set_tests_properties(
-        test_vulkan_gpu_encode_amf_h264 test_vulkan_gpu_encode_amf_hevc_p010 test_vulkan_gpu_encode_amf_h264_repeat
-        PROPERTIES DISABLED TRUE
       )
     endif()
     set_tests_properties(
