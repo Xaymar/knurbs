@@ -14,8 +14,9 @@ The C++23 core library of Knurbs. It is built beside libobs and ships as a share
 TODO (AppleClang floor and macOS deployment target): the macOS CI job builds the `libknurbs` target (compile only,
 no tests) since the final review; its first green run decides both rows. What is known:
 
-- libknurbs raises the macOS deployment target to 13.3 for itself and its tests (`KNURBS_MACOS_MINIMUM` in
-  `CMakeLists.txt`); the rest of OBS stays at 13.0. libc++ marks the floating-point `std::to_chars` that
+- libknurbs raises the macOS deployment target to 13.3 for itself and its tests (`KNURBS_MACOS_MINIMUM` and
+  `knurbs_apply_macos_minimum` in `CMakeLists.txt`, per target because Xcode applies `CMAKE_XCODE_ATTRIBUTE_*`
+  project-wide); the rest of OBS stays at 13.0. libc++ marks the floating-point `std::to_chars` that
   `std::format` uses as introduced in macOS 13.3 (macOS CI on 023367412).
 - Apple's libc++ in Xcode 26.5 has no `std::move_only_function` (macOS CI on 22b9fe316), so libknurbs uses its own
   `knurbs::move_only_function` (`knurbs/function.hpp`) on every platform. The same CI build reported no error for

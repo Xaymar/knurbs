@@ -142,3 +142,5 @@ knurbs_add_test(test_c_data C)
 knurbs_add_test(test_c_registry C)
 add_dependencies(test_c_registry ${_knurbs_fake_modules})
 target_compile_definitions(test_c_registry PRIVATE KNURBS_TEST_MODULES_DIR="${_knurbs_test_modules_dir}")
+
+knurbs_apply_macos_minimum("${CMAKE_CURRENT_SOURCE_DIR}")
