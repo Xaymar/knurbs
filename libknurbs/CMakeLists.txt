@@ -21,7 +21,14 @@ add_library(knurbs::knurbs ALIAS libknurbs)
 
 target_sources(
   libknurbs
-  PRIVATE source/error.cpp source/log.cpp source/object.cpp source/platform.cpp source/thread.cpp source/version.cpp
+  PRIVATE
+    source/error.cpp
+    source/log.cpp
+    source/naming.cpp
+    source/object.cpp
+    source/platform.cpp
+    source/thread.cpp
+    source/version.cpp
 )
 
 target_include_directories(
@@ -30,6 +37,12 @@ target_include_directories(
 )
 target_compile_features(libknurbs PUBLIC cxx_std_23)
 target_compile_definitions(libknurbs PRIVATE KNURBS_BUILDING)
+# naming::check_key is compiled into the library, so its checking is controlled by the library's own definition:
+# on for Debug builds and whenever tests are built.
+target_compile_definitions(libknurbs PRIVATE $<$<CONFIG:Debug>:KNURBS_CHECK_KEYS>)
+if(KNURBS_BUILD_TESTS)
+  target_compile_definitions(libknurbs PRIVATE KNURBS_CHECK_KEYS)
+endif()
 
 if(MSVC)
   target_compile_options(libknurbs PUBLIC /EHsc /permissive- /Zc:__cplusplus /utf-8)
