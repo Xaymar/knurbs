@@ -478,8 +478,8 @@ if(ENABLE_VULKAN)
   endif()
 
   # Game capture and window capture on the Vulkan renderer: a producer window (the test itself) with a known
-  # pattern, captured through the real pipeline (hook injection, WGC, BitBlt) and read back. KNURBS_TEST_OBS_HOOK_DIR
-  # (an OBS Studio installation's data/obs-plugins/win-capture) adds the game capture tests against that hook.
+  # pattern, captured through the real pipeline (hook injection, WGC, BitBlt) and read back. Game capture runs against the
+  # hook Knurbs ships: OBS Studio's signed release binaries (plugins/win-capture/cmake/obs-hook.cmake).
   if(OS_WINDOWS AND TARGET win-capture)
     # Installing the hook into C:\ProgramData\obs-studio-hook: signed hooks only, never a downgrade.
     obs_add_unit_test(test_win_capture_hook_install)
@@ -492,13 +492,17 @@ if(ENABLE_VULKAN)
     target_compile_definitions(test_win_capture_hook_install PRIVATE OBS_SIGNED_HOOK_DIR="${KNURBS_OBS_HOOK_DIR}")
     set_tests_properties(test_win_capture_hook_install PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")
 
-    add_executable(test_vulkan_win_capture test_vulkan_win_capture.cpp)
+    add_executable(
+      test_vulkan_win_capture
+      test_vulkan_win_capture.cpp
+      "${CMAKE_SOURCE_DIR}/plugins/win-capture/game-capture-hook-install.c"
+    )
+    target_include_directories(test_vulkan_win_capture PRIVATE "${CMAKE_SOURCE_DIR}/plugins/win-capture")
     target_include_directories(test_vulkan_win_capture PRIVATE ${CMOCKA_INCLUDE_DIR})
     target_compile_definitions(test_vulkan_win_capture PRIVATE OBS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     target_compile_features(test_vulkan_win_capture PRIVATE cxx_std_17)
-    target_link_libraries(test_vulkan_win_capture PRIVATE OBS::libobs d3d11 dxgi cmocka::cmocka)
+    target_link_libraries(test_vulkan_win_capture PRIVATE OBS::libobs d3d11 dxgi cmocka::cmocka crypt32 wintrust)
     add_dependencies(test_vulkan_win_capture libobs-vulkan win-capture libobs-winrt)
-    set(KNURBS_TEST_OBS_HOOK_DIR "" CACHE PATH "OBS Studio's win-capture data dir, for game capture tests against its hook")
     set(_win_capture_dir "${OBS_OUTPUT_DIR}/$<CONFIG>/${OBS_PLUGIN_DESTINATION}/win-capture")
     set(_win_capture_data "${_win_capture_dir}/data")
     set(_win_capture_tests)
@@ -555,11 +559,6 @@ if(ENABLE_VULKAN)
           _win_capture_test(${_gpu}_${_case} ${_driver} "${_win_capture_data}" ${_case})
         endif()
       endforeach()
-      if(KNURBS_TEST_OBS_HOOK_DIR)
-        foreach(_case IN ITEMS game_bgra game_rgba game_rgb10a2 game_rgba16f game_shmem_bgra)
-          _win_capture_test(${_gpu}_obs_hook_${_case} ${_driver} "${KNURBS_TEST_OBS_HOOK_DIR}" ${_case})
-        endforeach()
-      endif()
     endforeach()
     set_tests_properties(
       ${_win_capture_tests}

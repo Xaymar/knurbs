@@ -22,8 +22,9 @@
 // OBS_DXGI_DUPLICATOR_TEST_HDR), _resize (the window keeps resizing), _mode (display cases: the monitor changes to a
 // smaller resolution for a few seconds and back; the original mode is restored even when the test fails).
 //
-// The data dir holds the hook binaries (graphics-hook64.dll, inject-helper64.exe, get-graphics-offsets64.exe); point
-// it at an OBS Studio installation's win-capture data dir to test against the official, signed hook.
+// The data dir holds the hook binaries (graphics-hook64.dll, inject-helper64.exe, get-graphics-offsets64.exe): the
+// ones Knurbs ships, OBS Studio's official release binaries. Game capture cases require the hook loaded into the
+// producer to be that one and to be signed by OBS Project, LLC.
 //
 // Every frame read back after the first captured one must show one of the two phases (8-bit and 10-bit: exact colours
 // within a small tolerance, so a missing or doubled sRGB conversion fails; 16-bit float: the dominant channel), both
@@ -51,6 +52,8 @@
 #include <obs.h>
 #include <obs-module.h>
 #include <util/platform.h>
+
+#include "game-capture-hook-install.h"
 
 // cmocka.h redefines `inline`, so it must come after the C++ standard headers.
 #include <setjmp.h>
@@ -854,13 +857,18 @@ static void test_capture(void **)
 
 	// The path each method must take.
 	if (game) {
-		// The hook from the data dir given (an OBS Studio installation's, to test against the official one).
+		// The hook shipped in the data dir given, which is OBS Studio's official, signed one.
 		print_message("hook loaded by the producer: %s\n", hook.c_str());
 		char want[MAX_PATH], got[MAX_PATH];
 		const std::string want_path = std::string(data_dir) + "/graphics-hook64.dll";
 		assert_non_null(_fullpath(want, want_path.c_str(), MAX_PATH));
 		assert_non_null(_fullpath(got, hook.c_str(), MAX_PATH));
 		assert_int_equal(_stricmp(want, got), 0);
+		wchar_t got_w[MAX_PATH];
+		assert_true(MultiByteToWideChar(CP_UTF8, 0, got, -1, got_w, MAX_PATH) > 0);
+		if (!hook_signed_by_obs(got_w)) {
+			fail_msg("the hook loaded is not signed by " HOOK_SIGNER_NAME_A);
+		}
 		assert_true(logged(shmem ? "memory capture successful" : "shared texture capture successful"));
 	} else if ((wgc || base == "display_wgc") && !d3d11) {
 		if (!logged("capturing through a D3D11 device")) {
