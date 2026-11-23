@@ -13,7 +13,7 @@ permissions:
   contents: write
 jobs:
   check-format:
-    name: Format 🔍
+    name: Validate Manifests 🔍
     if: github.ref_name == 'master'
     uses: ./.github/workflows/check-format.yaml
     permissions:

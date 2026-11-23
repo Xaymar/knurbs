@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   check-format:
-    name: Format 🔍
+    name: Validate Manifests 🔍
     uses: ./.github/workflows/check-format.yaml
     permissions:
       contents: read
