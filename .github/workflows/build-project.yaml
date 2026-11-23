@@ -252,6 +252,63 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ${{ runner.os }}-${{ matrix.os }}-ccache-x86_64-${{ needs.check-event.outputs.config }}
 
+  ubuntu-tests:
+    name: Ubuntu Tests 🧪
+    runs-on: ubuntu-26.04
+    needs: check-event
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Zsh 🛍️
+        run: |
+          : Install Zsh 🛍️
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          echo "/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin" >> $GITHUB_PATH
+          brew update
+          brew install --quiet zsh
+
+      - name: Install Dependencies 🛍️
+        shell: zsh --no-rcs --errexit --pipefail {0}
+        run: |
+          : Install Dependencies 🛍️
+
+          # Same dependency setup that .github/scripts/build-ubuntu runs (apt packages, VST3 SDK, CEF into .deps).
+          install_dependencies() {
+            local project_root=${GITHUB_WORKSPACE}
+            local target=ubuntu-x86_64
+            fpath=(${project_root}/.github/scripts/utils.zsh ${fpath})
+            autoload -Uz setup_ubuntu
+            setup_ubuntu
+          }
+          install_dependencies
+          sudo apt-get install -y --no-install-recommends xvfb
+
+      - name: Configure 🔧
+        run: |
+          : Configure 🔧
+          cmake --preset ubuntu-ci \
+            -DENABLE_UNIT_TESTS=ON \
+            -DENABLE_FRONTEND=OFF \
+            -DENABLE_BROWSER=OFF \
+            -DOBS_VERSION_OVERRIDE=33.0.0 \
+            -DCMAKE_PREFIX_PATH:PATH="${GITHUB_WORKSPACE}/.deps"
+
+      - name: Build Unit Tests 🧱
+        run: |
+          : Build Unit Tests 🧱
+          cmake --build build_ubuntu --target obs-unit-tests --parallel
+
+      - name: Run Unit Tests 🧪
+        run: |
+          : Run Unit Tests 🧪
+          xvfb-run -a ctest --test-dir build_ubuntu --output-on-failure
+
   flatpak-build:
     name: Flatpak 📦
     runs-on: ubuntu-26.04
@@ -426,3 +483,50 @@ jobs:
         with:
           name: obs-studio-windows-${{ matrix.architecture }}-${{ needs.check-event.outputs.commitHash }}
           path: ${{ github.workspace }}/build_${{ matrix.architecture }}/obs-studio-*-windows-${{ matrix.architecture }}.zip
+
+  windows-tests:
+    name: Windows Tests 🧪
+    runs-on: windows-2025-vs2026
+    needs: check-event
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Dependencies 🛍️
+        run: |
+          # Install Dependencies 🛍️
+          # Same winget setup that .github/scripts/Build-Windows.ps1 runs. obs-deps is downloaded by CMake
+          # during configure, as it is for the regular build.
+          $ErrorActionPreference = 'Stop'
+          foreach ($Utility in Get-ChildItem -Path .github/scripts/utils.pwsh/*.ps1 -Recurse) {
+            . $Utility.FullName
+          }
+          Install-BuildDependencies -WingetFile .github/scripts/.Wingetfile
+          # Keep the PATH that Install-BuildDependencies built up for the following steps.
+          Add-Content -Path $Env:GITHUB_PATH -Value ($Env:Path -split ';')
+
+      - name: Configure 🔧
+        run: |
+          # Configure 🔧
+          cmake --preset windows-ci-x64 `
+            -DENABLE_UNIT_TESTS=ON `
+            -DENABLE_FRONTEND=OFF `
+            -DOBS_VERSION_OVERRIDE=33.0.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Unit Tests 🧱
+        run: |
+          # Build Unit Tests 🧱
+          cmake --build --preset windows-x64 --config RelWithDebInfo --target obs-unit-tests --parallel -- /consoleLoggerParameters:Summary /noLogo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run Unit Tests 🧪
+        run: |
+          # Run Unit Tests 🧪
+          ctest --test-dir build_x64 -C RelWithDebInfo --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
