@@ -71,6 +71,13 @@ if(OS_WINDOWS)
   if(CMAKE_VS_PLATFORM_NAME STREQUAL x64)
     target_sources(obs-ffmpeg PRIVATE texture-amf-opts.hpp texture-amf.cpp)
     target_link_libraries(obs-ffmpeg PRIVATE AMF::AMF)
+    # The Vulkan renderer's texture path: headers only, vulkan-1.dll is loaded at run time.
+    if(ENABLE_VULKAN)
+      find_package(Vulkan REQUIRED)
+      target_sources(obs-ffmpeg PRIVATE texture-amf-vulkan.cpp texture-amf-vulkan.hpp)
+      target_link_libraries(obs-ffmpeg PRIVATE Vulkan::Headers)
+      target_compile_definitions(obs-ffmpeg PRIVATE ENABLE_AMF_VULKAN)
+    endif()
   endif()
 
   configure_file(cmake/windows/obs-module.rc.in obs-ffmpeg.rc)

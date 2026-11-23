@@ -453,6 +453,25 @@ if(ENABLE_VULKAN)
       # A stalled render: libobs repeats frames, so one shared frame sits in several NVENC slots at once.
       _gpu_encode_test(nvenc_h264_repeat *nv-vk64* knurbs-nvenc ${_nv}.h264 nv12 rate_control=CQP cqp=20 bf=2 stall=10)
     endif()
+    if(TARGET obs-ffmpeg)
+      add_dependencies(test_vulkan_gpu_encode obs-ffmpeg)
+      _gpu_encode_probe(obs-amf-test)
+      _gpu_encode_test(amf_h264 *amd-vulkan64* obs-ffmpeg h264_texture_amf nv12 rate_control=CQP cqp=20)
+      _gpu_encode_test(amf_hevc_p010 *amd-vulkan64* obs-ffmpeg h265_texture_amf p010 rate_control=CQP cqp=20)
+      _gpu_encode_test(amf_h264_repeat *amd-vulkan64* obs-ffmpeg h264_texture_amf nv12 rate_control=CQP cqp=20 stall=10)
+      # AMF's Vulkan texture path is opt-in (texture-amf.cpp amf_init_texture): AMF (Adrenalin 26.11.2, Radeon 780M)
+      # now and then encodes the picture of an earlier input instead of the one it was given, more often after a
+      # stalled render. These tests show it (docs/graphics-interop.md, Driver issues) and are disabled until it is
+      # fixed; run them with ctest -R gpu_encode_amf after removing the DISABLED property, or the executable directly.
+      set_property(
+        TEST test_vulkan_gpu_encode_amf_h264 test_vulkan_gpu_encode_amf_hevc_p010 test_vulkan_gpu_encode_amf_h264_repeat
+        APPEND PROPERTY ENVIRONMENT "OBS_AMF_VULKAN_TEXTURE=1"
+      )
+      set_tests_properties(
+        test_vulkan_gpu_encode_amf_h264 test_vulkan_gpu_encode_amf_hevc_p010 test_vulkan_gpu_encode_amf_h264_repeat
+        PROPERTIES DISABLED TRUE
+      )
+    endif()
     set_tests_properties(
       ${_gpu_encode_tests}
       PROPERTIES
