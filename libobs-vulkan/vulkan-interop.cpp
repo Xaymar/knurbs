@@ -710,6 +710,12 @@ static bool create_exportable(gs_device *d, uint32_t width, uint32_t height, enu
 			      enum gs_shared_layout layout, uint32_t flags, gs_texture **tex, gs_texture **tex_uv)
 {
 	const VkExternalMemoryHandleTypeFlagBits ht = export_memory_type();
+	// Two-plane frames the compute conversion can write get STORAGE usage; the flag goes into the export
+	// description, so importers create their image the same way. Decided here, not by the caller.
+	flags &= ~GS_SHADER_STORAGE;
+	if (vk_yuv_storage(d, layout)) {
+		flags |= GS_SHADER_STORAGE;
+	}
 	vk_image_desc id;
 	if (!ht || !memory_ext(d) || !vk_texture_image_info(d, width, height, format, layout, flags, id) ||
 	    !external_image_ok(d, id, ht, false)) {

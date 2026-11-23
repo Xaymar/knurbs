@@ -291,6 +291,19 @@ if(ENABLE_VULKAN)
   target_link_libraries(test_vulkan_yuv_storage PRIVATE Vulkan::Vulkan cmocka::cmocka)
   add_test(NAME test_vulkan_yuv_storage COMMAND test_vulkan_yuv_storage)
 
+  # Compute YUV conversion against the fragment passes (NV12/P010/P216 at three sizes, within 1 LSB) and GPU timings
+  # of both; skips without a device.
+  add_executable(test_vulkan_yuv_compute test_vulkan_yuv_compute.cpp)
+  target_include_directories(test_vulkan_yuv_compute PRIVATE ${CMOCKA_INCLUDE_DIR})
+  target_compile_definitions(
+    test_vulkan_yuv_compute
+    PRIVATE OBS_SOURCE_DIR="${CMAKE_SOURCE_DIR}" OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan"
+  )
+  target_compile_features(test_vulkan_yuv_compute PRIVATE cxx_std_17)
+  add_dependencies(test_vulkan_yuv_compute libobs-vulkan)
+  target_link_libraries(test_vulkan_yuv_compute PRIVATE OBS::libobs cmocka::cmocka)
+  add_test(NAME test_vulkan_yuv_compute COMMAND test_vulkan_yuv_compute)
+
   if(OS_WINDOWS)
     # External memory and sync (D3D11 import, keyed mutex, export/import across devices and processes); needs a
     # device (skips without one).
@@ -422,6 +435,7 @@ if(ENABLE_VULKAN)
     test_vulkan_shader
     test_vulkan_draw
     test_vulkan_nv12
+    test_vulkan_yuv_compute
     test_vulkan_depth
     test_vulkan_features
     test_vulkan_loss
@@ -431,6 +445,8 @@ if(ENABLE_VULKAN)
       ENVIRONMENT "OBS_VULKAN_VALIDATION=1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
       SKIP_REGULAR_EXPRESSION "SKIPPED"
   )
+  # Runs the libobs graphics API (gs_create), so it needs the libobs runtime on PATH.
+  set_tests_properties(test_vulkan_yuv_compute PROPERTIES ENVIRONMENT_MODIFICATION "${_obs_runtime_env}")
   if(OS_WINDOWS)
     set_tests_properties(
       test_vulkan_interop

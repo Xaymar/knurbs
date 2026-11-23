@@ -242,6 +242,9 @@ bool load_graphics_imports(struct gs_exports *exports, void *module, const char 
 	GRAPHICS_IMPORT_OPTIONAL(gs_sharedbuf_destroy);
 	GRAPHICS_IMPORT_OPTIONAL(device_sharedbuf_copy_texture);
 	GRAPHICS_IMPORT_OPTIONAL(device_sharedbuf_export);
+	GRAPHICS_IMPORT_OPTIONAL(device_yuv_compute_available);
+	GRAPHICS_IMPORT_OPTIONAL(device_texture_convert_yuv);
+	GRAPHICS_IMPORT_OPTIONAL(device_sharedbuf_convert);
 	GRAPHICS_IMPORT_OPTIONAL(device_timeline_create);
 	GRAPHICS_IMPORT_OPTIONAL(device_timeline_import);
 	GRAPHICS_IMPORT_OPTIONAL(device_timeline_export);

@@ -3108,6 +3108,25 @@ bool gs_sharedbuf_copy_texture(gs_sharedbuf_t *buf, gs_texture_t *tex_y)
 	GS_INTEROP_CALL(sharedbuf_copy_texture, false, buf, tex_y);
 }
 
+bool gs_yuv_compute_available(enum gs_shared_layout layout, bool buffer)
+{
+	GS_INTEROP_CALL(yuv_compute_available, false, layout, buffer);
+}
+
+bool gs_texture_convert_yuv(gs_texture_t *tex_y, gs_texture_t *src, const struct gs_yuv_conversion *conv)
+{
+	if (!tex_y || !src || !conv)
+		return false;
+	GS_INTEROP_CALL(texture_convert_yuv, false, tex_y, src, conv);
+}
+
+bool gs_sharedbuf_convert(gs_sharedbuf_t *buf, gs_texture_t *src, const struct gs_yuv_conversion *conv)
+{
+	if (!buf || !src || !conv)
+		return false;
+	GS_INTEROP_CALL(sharedbuf_convert, false, buf, src, conv);
+}
+
 bool gs_sharedbuf_export(gs_sharedbuf_t *buf, enum gs_handle_type type, struct gs_shared_texture_desc *desc)
 {
 	if (!buf || !desc)

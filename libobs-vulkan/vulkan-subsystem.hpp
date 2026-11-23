@@ -93,6 +93,16 @@ struct vk_pipeline_cache {
 	void forget(gs_shader *shader); // destroys (deferred) everything built from `shader`
 };
 
+// Compute RGB -> two-plane YUV conversion (vulkan-yuv.cpp). Pipelines are made on first use per variant.
+struct vk_yuv {
+	bool enabled = true; // OBS_VULKAN_YUV_CONVERT is not "fragment"
+	bool images[3] = {}; // per gs_shared_layout: two-plane images of it get STORAGE plane views
+	VkSampler sampler = VK_NULL_HANDLE;
+	VkDescriptorSetLayout set_layout[2] = {}; // [0] image target, [1] buffer target
+	VkPipelineLayout layout[2] = {};
+	std::unordered_map<uint32_t, VkPipeline> pipelines; // by variant key; VK_NULL_HANDLE: creation failed
+};
+
 // Every live object of a device, for the device-loss rebuild (vulkan-rebuild.cpp), which recreates their Vulkan
 // objects in place so the gs_* pointers libobs and plugins hold stay valid. Swapchain targets are not listed (their
 // swapchain is).
@@ -148,6 +158,8 @@ struct gs_device {
 	bool colorspace_ext = false;  // VK_EXT_swapchain_colorspace enabled (HDR and 16F swapchains)
 	gs_vulkan_device native = {}; // device_get_device_obj
 	vk_timer_pools timers;
+	bool storage_ext_formats = false; // shaderStorageImageExtendedFormats enabled (r8/rg8/r16/rg16 storage images)
+	vk_yuv yuv;
 	// Test hooks, read once by vk_device_init (see also frames.test_fail_submit and frames.test_lose_after).
 	bool test_no_loader = false;       // OBS_VULKAN_TEST_NO_LOADER=1: behave as without vulkan-1.dll
 	bool test_refuse_realtime = false; // OBS_VULKAN_TEST_REFUSE_REALTIME=1: a realtime priority is refused
@@ -225,6 +237,10 @@ struct gs_texture {
 	VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT; // PLANE_0 (Y) or PLANE_1 (UV) for plane views
 	VkFormat image_format = VK_FORMAT_UNDEFINED;           // plane views: the multi-planar format of `image`
 	gs_texture *plane_peer = nullptr;                      // the other plane's view while it exists
+	// Plane views of images created with STORAGE usage (GS_SHADER_STORAGE): the plane's storage view, made by the
+	// first compute conversion into it (vulkan-yuv.cpp).
+	bool storage = false;
+	VkImageView storage_view = VK_NULL_HANDLE;
 	// External textures (vulkan-interop.cpp): imported or exportable memory in a dedicated VkDeviceMemory instead of
 	// `alloc`, freed with the image. Plane views share it as they share `image`.
 	VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -520,7 +536,21 @@ bool vk_sharedbuf_recreate(gs_device *d, gs_shared_buffer *b);
 void vk_timeline_release(gs_device *d, gs_timeline *t);
 bool vk_timeline_recreate(gs_device *d, gs_timeline *t);
 
-/* ---- Timers (vulkan-timer.cpp) --------------------------------------------------------------------------------- */
+/* ---- Compute YUV conversion (vulkan-yuv.cpp) ------------------------------------------------------------------- */
+
+// After device creation: decides d->yuv.images from the format support (the rule test_vulkan_yuv_storage probes).
+void vk_yuv_init(gs_device *d);
+// Device teardown (GPU idle): pipelines, layouts, sampler.
+void vk_yuv_free(gs_device *d);
+// Whether two-plane images of `layout` are created with STORAGE usage.
+inline bool vk_yuv_storage(const gs_device *d, enum gs_shared_layout layout)
+{
+	return d->yuv.enabled && layout > GS_SHARED_SINGLE && layout <= GS_SHARED_P010 && d->yuv.images[layout];
+}
+// Descriptor set from the recording frame's pools (vulkan-pipeline.cpp); VK_NULL_HANDLE on failure.
+VkDescriptorSet vk_alloc_set(gs_device *d, VkDescriptorSetLayout layout);
+
+/* ---- Timers (vulkan-timer.cpp)--------------------------------------------------------------------------------- */
 
 // Reads timestampValidBits/timestampPeriod; called by vk_device_open.
 void vk_timers_init(gs_device *d, uint32_t valid_bits, bool host_reset);

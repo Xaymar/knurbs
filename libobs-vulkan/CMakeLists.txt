@@ -27,6 +27,7 @@ target_sources(
     vulkan-timer.cpp
     vulkan-tracker.cpp
     vulkan-tracker.hpp
+    vulkan-yuv.cpp
 )
 
 target_compile_features(libobs-vulkan PRIVATE cxx_std_17)
