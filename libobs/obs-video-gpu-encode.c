@@ -196,7 +196,9 @@ void gpu_encode_prepare_frame(struct obs_core_video_mix *video, struct obs_tex_f
 				tf->buf = NULL;
 			}
 		}
-		if (tf->buf)
+		/* One compute dispatch from the RGB output straight into the buffer, or the copy of the frame */
+		if (tf->buf && !(video->gpu_encode_src &&
+				 gs_sharedbuf_convert(tf->buf, video->gpu_encode_src, &video->gpu_encode_conv)))
 			gs_sharedbuf_copy_texture(tf->buf, tf->tex);
 	}
 

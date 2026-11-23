@@ -412,6 +412,11 @@ struct obs_core_video_mix {
 	uint64_t gpu_encode_ready_value;
 	uint64_t gpu_encode_next_id;
 	DARRAY(struct obs_gpu_export) gpu_encode_exports;
+	/* Compute conversion (gs_sharedbuf_convert): while a frame is rendered, the RGB texture the frame buffers are
+	 * converted from instead of copied from the NV12/P010 frame; NULL: copy. */
+	gs_texture_t *gpu_encode_src;
+	struct gs_yuv_conversion gpu_encode_conv;
+	int gpu_encode_yuv_path; /* last logged choice (bit 0: image by compute, 1: image skipped, 2: buffer by compute) */
 
 	video_t *video;
 	struct obs_video_info ovi;

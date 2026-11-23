@@ -59,7 +59,19 @@ Windows), and the vendor and device IDs. Another API or process uses these to op
 **Pitch-linear frame buffer** (`gs_sharedbuf_t`). This is GPU memory holding an NV12 or P010 frame: Y rows, then UV
 rows. Each pitch is a multiple of 256 bytes, and `desc.offsets`/`desc.pitches` give the exact layout. On Windows NVENC
 accepts zero-copy input only in this form (`CUDADEVICEPTR`, spike 3). `gs_sharedbuf_copy_texture(buf, tex_y)` records
-one GPU copy of both planes of an NV12/P010 texture. `gs_sharedbuf_export` returns its handle and layout.
+one GPU copy of both planes of an NV12/P010 texture; `gs_sharedbuf_convert(buf, src, conv)` instead writes it straight
+from the RGB output in one compute dispatch (see "Compute YUV conversion" below). `gs_sharedbuf_export` returns its
+handle and layout.
+
+**Compute YUV conversion** (Vulkan, `libobs-vulkan/vulkan-yuv.cpp`). `gs_texture_convert_yuv(tex_y, src, conv)` and
+`gs_sharedbuf_convert` convert RGB into NV12/P010 in one dispatch with the math of `format_conversion.effect` (same
+colour vectors, sRGB/PQ/HLG transfers, left-sited chroma, P010 quantisation), replacing the two fragment passes and,
+for the frame buffer, the copy. Images get per-plane storage views (r8/rg8, r16/rg16) of an image created with
+`STORAGE` usage; the backend adds that usage, and `GS_SHADER_STORAGE` to the exported flags, only where the plane
+formats support storage images (`test_vulkan_yuv_storage` probes the rule on every device). Importers create the
+image with the exported flags, so AMF adds `STORAGE` too. `gs_yuv_compute_available(layout, buffer)` says which
+targets work; `OBS_VULKAN_YUV_CONVERT=fragment` turns all of it off for comparison (`compute` or unset: on).
+Output matches the fragment passes within one LSB (`test_vulkan_yuv_compute`, which also times both).
 
 **Timelines** (`gs_timeline_t`, timeline semaphores).
 * `gs_timeline_create(initial)` creates an exportable timeline. `gs_timeline_import(&handle)` imports one.
@@ -186,8 +198,10 @@ and finds the frame in `encoder_texture::shared` (`struct encoder_texture_shared
 * `tex`: the NV12/P010 image (both planes, `GS_RENDER_TARGET`), exported once per image and identified by `tex_id`.
   The encode conversion targets and the encoder frames are exportable textures on Vulkan; they swap as before, so an
   image moves between frames and `tex_id` follows the image, not the frame.
-* `buf`: with `OBS_ENCODER_CAP_SHARED_BUFFER` also, a pitch-linear copy (`gs_sharedbuf_t`) identified by `buf_id`.
-  libobs records the copy right after the conversion, only while such an encoder is active.
+* `buf`: with `OBS_ENCODER_CAP_SHARED_BUFFER` also, a pitch-linear frame (`gs_sharedbuf_t`) identified by `buf_id`,
+  written only while such an encoder is active: by compute straight from the RGB output (`gs_sharedbuf_convert`), or
+  where that is unavailable as a copy of the image right after the conversion. When only such encoders read the
+  frame (no raw output, no image encoder), the image is not converted at all.
 * `ready` / `ready_value`: one timeline for the pool, signalled by the render thread once the frame (and its copy)
   is written. Read the frame only after it reached the value.
 * `release` / `release_value`: a timeline per encoder (created in `start_gpu_encode`). The encoder signals it to at
@@ -206,8 +220,8 @@ when `encode_texture2` returns, as before. Exported memory is always a dedicated
 
 | Encoder | Path | Copies per frame | Sync |
 |---|---|---|---|
-| knurbs-nvenc | `buf` imported into CUDA, registered as `CUDADEVICEPTR` | 1 (libobs: image to buffer) | CUDA waits `ready` on its stream (and the encode thread waits for the stream); CUDA signals `release` once the frame's bitstream is locked |
-| AMF (knurbs-amf; `OBS_AMF_VULKAN_TEXTURE=0` forces the non-texture encoder) | `tex` imported as a VkImage into the encoder's own VkDevice and wrapped **once per image** with `CreateSurfaceFromVulkanNative`; that `AMFSurface` is resubmitted for the image's lifetime (a repeated frame still held by AMF gets a second one) | 0 in OBS (1 with a raw output active, as on D3D11); AMF's own conversion as on D3D11 | host waits on `ready` (`vkWaitSemaphores`); host signals `release` once AMF holds no reference to the frame's surface any more (polled on each encode call: `OnSurfaceDataRelease` does not fire while the encoder keeps its own reference) |
+| knurbs-nvenc | `buf` imported into CUDA, registered as `CUDADEVICEPTR` | 0 (compute writes the buffer from the RGB output; 1, image to buffer, with `OBS_VULKAN_YUV_CONVERT=fragment`) | CUDA waits `ready` on its stream (and the encode thread waits for the stream); CUDA signals `release` once the frame's bitstream is locked |
+| AMF (knurbs-amf; `OBS_AMF_VULKAN_TEXTURE=0` forces the non-texture encoder) | `tex` imported as a VkImage into the encoder's own VkDevice and wrapped **once per image** with `CreateSurfaceFromVulkanNative`; that `AMFSurface` is resubmitted for the image's lifetime (a repeated frame still held by AMF gets a second one) | 0 in OBS (1 with a raw output active, as on D3D11); the image is written by one compute dispatch where the device allows storage plane views, else by the fragment passes; AMF's own conversion as on D3D11 | host waits on `ready` (`vkWaitSemaphores`); host signals `release` once AMF holds no reference to the frame's surface any more (polled on each encode call: `OnSurfaceDataRelease` does not fire while the encoder keeps its own reference) |
 
 NVENC uses the buffer because on Windows an NV12 image imported as a CUDA array reads back garbage (spike 3). Its
 CUDA device is the one whose UUID matches the renderer's adapter; on another GPU it reroutes to the non-texture
