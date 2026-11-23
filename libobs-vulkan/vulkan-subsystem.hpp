@@ -195,7 +195,9 @@ struct gs_device {
 	VkPhysicalDeviceIDProperties id = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
 	uint32_t vendor_id = 0, device_id = 0;
 	bool ext_memory_win32 = false, ext_semaphore_win32 = false, ext_keyed_mutex = false;
-	struct vk_interop *interop = nullptr; // extension entry points and the D3D11 probe device
+	// Linux: opaque fds, dmabufs with DRM format modifiers, VK_QUEUE_FAMILY_FOREIGN_EXT for dmabufs.
+	bool ext_memory_fd = false, ext_dmabuf = false, ext_semaphore_fd = false, ext_foreign = false;
+	struct vk_interop *interop = nullptr; // extension entry points, the D3D11 probe device, GBM
 	// Consumed by the next submission (vk_flush): timeline waits and signals, keyed mutex releases.
 	vk_submit_extra pending;
 	std::vector<VkDeviceMemory> km_release_mem;
@@ -251,6 +253,12 @@ struct gs_texture {
 	uint32_t shared_handle = 0xFFFFFFFFu; // legacy open_shared/open_nt_shared: the handle it was opened from
 	bool keyed_mutex = false;             // imported D3D11 texture with a keyed mutex
 	void *km_probe = nullptr; // keyed mutex textures: IDXGIKeyedMutex on the D3D11 probe (finite-timeout acquires)
+	// Linux, GBM-allocated exportable textures: the dmabuf (closed with the image) and its layout. Exports hand out
+	// copies of this fd: memory imported with VkExportMemoryAllocateInfo is not the imported buffer on NVIDIA.
+	int dmabuf_fd = -1;
+	uint32_t dmabuf_planes = 0;
+	uint32_t dmabuf_offsets[4] = {}, dmabuf_pitches[4] = {};
+	uint64_t dmabuf_modifier = 0;
 
 	// How it was created, so the device-loss rebuild can create it again (vulkan-rebuild.cpp).
 	enum origin_t : uint8_t {
@@ -316,6 +324,8 @@ void vk_interop_init(gs_device *d, const std::vector<const char *> &enabled);
 void vk_interop_free(gs_device *d);
 // Releases a texture's km_probe (a COM object), called when the texture is destroyed.
 void vk_interop_release(void *com);
+// Closes a fd a texture keeps (dmabuf_fd), called when its image is destroyed.
+void vk_interop_close_fd(int fd);
 // vk_flush: records the release of acquired external resources and moves d->pending (and keyed mutex releases)
 // into `extra` for the submission; `km` backs extra.pnext and must outlive the submit.
 struct vk_keyed_mutex_info;

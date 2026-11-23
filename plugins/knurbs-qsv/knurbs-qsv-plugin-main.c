@@ -56,7 +56,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <obs-module.h>
 
 #include "common_utils.h"
-#include "qsv-migrate.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("knurbs-qsv", "en-US")
@@ -102,6 +101,5 @@ bool obs_module_load(void)
 	}
 #endif
 
-	qsv_register_encoder_aliases();
 	return true;
 }

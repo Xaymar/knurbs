@@ -254,6 +254,9 @@ struct gs_exports {
 	bool (*device_sync_file_export)(gs_device_t *device, struct gs_shared_handle *handle);
 	bool (*device_sync_file_wait)(gs_device_t *device, const struct gs_shared_handle *handle);
 
+	gs_stagesurf_t *(*device_stagesurface_create_nv12)(gs_device_t *device, uint32_t width, uint32_t height);
+	gs_stagesurf_t *(*device_stagesurface_create_p010)(gs_device_t *device, uint32_t width, uint32_t height);
+
 #ifdef __APPLE__
 	/* OSX/Cocoa specific functions */
 	gs_texture_t *(*device_texture_create_from_iosurface)(gs_device_t *dev, void *iosurf);
@@ -291,8 +294,6 @@ struct gs_exports {
 	int (*device_texture_acquire_sync)(gs_texture_t *tex, uint64_t key, uint32_t ms);
 	int (*device_texture_release_sync)(gs_texture_t *tex, uint64_t key);
 
-	gs_stagesurf_t *(*device_stagesurface_create_nv12)(gs_device_t *device, uint32_t width, uint32_t height);
-	gs_stagesurf_t *(*device_stagesurface_create_p010)(gs_device_t *device, uint32_t width, uint32_t height);
 	void (*device_register_loss_callbacks)(gs_device_t *device, const struct gs_device_loss *callbacks);
 	void (*device_unregister_loss_callbacks)(gs_device_t *device, void *data);
 #elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)

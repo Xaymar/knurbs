@@ -3213,6 +3213,44 @@ bool gs_sync_file_wait(const struct gs_shared_handle *handle)
 
 #undef GS_INTEROP_CALL
 
+gs_stagesurf_t *gs_stagesurface_create_nv12(uint32_t width, uint32_t height)
+{
+	graphics_t *graphics = thread_graphics;
+
+	if (!gs_valid("gs_stagesurface_create_nv12"))
+		return NULL;
+
+	if ((width & 1) == 1 || (height & 1) == 1) {
+		blog(LOG_ERROR, "NV12 textures must have dimensions "
+				"divisible by 2.");
+		return NULL;
+	}
+
+	if (graphics->exports.device_stagesurface_create_nv12)
+		return graphics->exports.device_stagesurface_create_nv12(graphics->device, width, height);
+
+	return NULL;
+}
+
+gs_stagesurf_t *gs_stagesurface_create_p010(uint32_t width, uint32_t height)
+{
+	graphics_t *graphics = thread_graphics;
+
+	if (!gs_valid("gs_stagesurface_create_p010"))
+		return NULL;
+
+	if ((width & 1) == 1 || (height & 1) == 1) {
+		blog(LOG_ERROR, "P010 textures must have dimensions "
+				"divisible by 2.");
+		return NULL;
+	}
+
+	if (graphics->exports.device_stagesurface_create_p010)
+		return graphics->exports.device_stagesurface_create_p010(graphics->device, width, height);
+
+	return NULL;
+}
+
 #ifdef __APPLE__
 
 /** Platform specific functions */
@@ -3466,44 +3504,6 @@ int gs_texture_release_sync(gs_texture_t *tex, uint64_t key)
 	if (graphics->exports.device_texture_release_sync)
 		return graphics->exports.device_texture_release_sync(tex, key);
 	return -1;
-}
-
-gs_stagesurf_t *gs_stagesurface_create_nv12(uint32_t width, uint32_t height)
-{
-	graphics_t *graphics = thread_graphics;
-
-	if (!gs_valid("gs_stagesurface_create_nv12"))
-		return NULL;
-
-	if ((width & 1) == 1 || (height & 1) == 1) {
-		blog(LOG_ERROR, "NV12 textures must have dimensions "
-				"divisible by 2.");
-		return NULL;
-	}
-
-	if (graphics->exports.device_stagesurface_create_nv12)
-		return graphics->exports.device_stagesurface_create_nv12(graphics->device, width, height);
-
-	return NULL;
-}
-
-gs_stagesurf_t *gs_stagesurface_create_p010(uint32_t width, uint32_t height)
-{
-	graphics_t *graphics = thread_graphics;
-
-	if (!gs_valid("gs_stagesurface_create_p010"))
-		return NULL;
-
-	if ((width & 1) == 1 || (height & 1) == 1) {
-		blog(LOG_ERROR, "P010 textures must have dimensions "
-				"divisible by 2.");
-		return NULL;
-	}
-
-	if (graphics->exports.device_stagesurface_create_p010)
-		return graphics->exports.device_stagesurface_create_p010(graphics->device, width, height);
-
-	return NULL;
 }
 
 void gs_register_loss_callbacks(const struct gs_device_loss *callbacks)

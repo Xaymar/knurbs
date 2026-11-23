@@ -5,6 +5,10 @@
 #include <graphics/graphics.h>
 #include <util/platform.h>
 
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+
 // cmocka.h redefines `inline`, so it must come after the C++ standard headers.
 #include <setjmp.h>
 #include <stdarg.h>
@@ -20,6 +24,21 @@ extern "C" {
 static void *open_module()
 {
 	return os_dlopen(OBS_VULKAN_MODULE);
+}
+
+// What libobs's graphics_dlsym (graphics-imports.c) sees: on Linux dlsym on a module handle also searches its
+// dependencies and finds libobs's own gs_* functions, which do not count as exports of the module.
+static void *module_symbol(void *module, const char *name)
+{
+	void *sym = os_dlsym(module, name);
+#ifndef _WIN32
+	Dl_info in_module, in_libobs;
+	if (sym && dladdr(sym, &in_module) && dladdr((void *)gs_get_device_type, &in_libobs) &&
+	    in_module.dli_fbase == in_libobs.dli_fbase) {
+		return nullptr;
+	}
+#endif
+	return sym;
 }
 
 static void test_module_loads(void **)
@@ -84,7 +103,7 @@ static void test_required_exports(void **)
 #endif
 	size_t missing = 0;
 	for (auto &name : names) {
-		if (!os_dlsym(module, name.c_str())) {
+		if (!module_symbol(module, name.c_str())) {
 			print_message("missing export: %s\n", name.c_str());
 			++missing;
 		}
@@ -105,7 +124,7 @@ static void test_optional_not_exported(void **)
 	for (auto &name : names) {
 		// Implemented for real (Task 2; NV12/P010 and the Windows interop in phase 2; device loss and fast clear in
 		// phase 2 step 3), so exporting them is
-		// correct. The sync_file pair is Linux-only and not yet implemented there.
+		// correct. The sync_file pair is Linux-only.
 		static const char *implemented[] = {
 			"device_enum_adapters",
 			"gpu_get_driver_version",
@@ -140,6 +159,10 @@ static void test_optional_not_exported(void **)
 			"device_register_loss_callbacks",
 			"device_unregister_loss_callbacks",
 			"device_can_adapter_fast_clear",
+#ifndef _WIN32
+			"device_sync_file_export",
+			"device_sync_file_wait",
+#endif
 #ifdef _WIN32
 			"device_texture_open_shared",
 			"device_texture_open_nt_shared",
@@ -155,7 +178,7 @@ static void test_optional_not_exported(void **)
 		if (real) {
 			continue;
 		}
-		if (os_dlsym(module, name.c_str())) {
+		if (module_symbol(module, name.c_str())) {
 			print_message("optional export must be absent: %s\n", name.c_str());
 			++exported;
 		}
@@ -203,7 +226,7 @@ static void test_null_module_exports_every_import(void **)
 	for (const char *key : {"GRAPHICS_IMPORT(", "GRAPHICS_IMPORT_OPTIONAL("}) {
 		for (auto &name : imports_for_platform(key)) {
 			++total;
-			if (!os_dlsym(module, name.c_str())) {
+			if (!module_symbol(module, name.c_str())) {
 				print_message("libobs-null lacks: %s\n", name.c_str());
 				++missing;
 			}

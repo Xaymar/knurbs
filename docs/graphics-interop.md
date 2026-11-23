@@ -3,7 +3,7 @@
 libobs shares GPU memory and GPU sync with other graphics APIs (D3D11 producers, CUDA/NVENC, AMF), other devices
 and other processes through the API in `libobs/graphics/graphics.h` ("External memory and synchronisation"). Its
 backend side is a set of optional imports (`graphics-imports.c`, declared in `device-exports.h`). libobs-vulkan
-implements them on Windows. libobs-d3d11, libobs-opengl and libobs-metal do not export them, so every call fails
+implements them on Windows and Linux. libobs-d3d11, libobs-opengl and libobs-metal do not export them, so every call fails
 there (false, NULL, 0 or -1), and so does the null test module (`test/null-graphics`).
 
 ## Design rules
@@ -28,14 +28,13 @@ there (false, NULL, 0 or -1), and so does the null test module (`test/null-graph
 | `GS_HANDLE_WIN32_D3D11` | NT handle of a D3D11 texture (`MISC_SHARED_NTHANDLE`) | import | â€” | Windows |
 | `GS_HANDLE_WIN32_D3D11_KMT` | legacy global share handle (`MISC_SHARED`, game capture) | import | â€” | Windows |
 | `GS_HANDLE_WIN32_D3D12_FENCE` | NT handle of an `ID3D12Fence` / `ID3D11Fence` | â€” | import | Windows |
-| `GS_HANDLE_FD` | opaque fd exported by Vulkan | export, import | export, import | Linux |
-| `GS_HANDLE_DMABUF` | dmabuf, one fd per plane, with offsets, pitches, modifier | import (export: single plane) | â€” | Linux |
+| `GS_HANDLE_FD` | opaque fd exported by Vulkan | export (NV12/P010 render targets), import | export, import | Linux |
+| `GS_HANDLE_DMABUF` | dmabuf, one fd per plane, with offsets, pitches, modifier | export (single plane; NV12/P010 copy targets via GBM), import | â€” | Linux |
 | `GS_HANDLE_SYNC_FD` | sync_file, binary and one-shot | â€” | `gs_sync_file_*` | Linux |
 
 `gs_shared_texture_supported(type, layout, format, import)` says whether a texture of that layout and format can be
-imported from, or exported as, a type on the current device. The Linux rows are declared but not implemented yet. The
-Linux backend adds them without changing the header: `gs_shared_texture_desc` already carries per-plane fds,
-`offsets`, `pitches` and `modifier`.
+imported from, or exported as, a type on the current device. The Linux rows needed no header change:
+`gs_shared_texture_desc` carries per-plane fds, `offsets`, `pitches` and `modifier` (see the Linux section).
 
 ## Objects and calls
 
@@ -91,9 +90,10 @@ explicit sync, which the spikes showed must go through a sync_file in both direc
   `gs_timeline_export`, `gs_sync_file_export`) creates a new handle, and the caller closes it with
   `gs_shared_handle_close` (`CloseHandle` / `close`). Exporting twice gives two handles. Closing a handle never
   affects the object: the texture, buffer or timeline lives until it is destroyed.
-* **Imports borrow the handle.** `gs_texture_import` and `gs_timeline_import` leave the handle with the caller, who
-  may close it right after the import (the object keeps its own reference to the memory or semaphore). This is how
-  Vulkan treats NT handles. Vulkan takes over imported fds, so the Linux backend must dup() them first, keeping the rule the same on Linux.
+* **Imports borrow the handle.** `gs_texture_import`, `gs_timeline_import` and `gs_sync_file_wait` leave the handle
+  with the caller, who may close it right after the import (the object keeps its own reference to the memory or
+  semaphore). This is how Vulkan treats NT handles. Vulkan takes over imported fds, so the Linux backend imports a
+  `dup()` of each, keeping the rule the same on Linux.
 * **KMT handles are names, not references.** There is nothing to close, and `gs_shared_handle_close` only resets
   them. The texture stays valid only while its D3D11 creator keeps it alive.
 * **Destruction is deferred**, as for every libobs-vulkan object: memory is freed once the GPU has finished the
@@ -105,17 +105,65 @@ explicit sync, which the spikes showed must go through a sync_file in both direc
 ## Ordering and ownership of contents
 
 Between this device's submissions, every external resource (exportable or imported) belongs to the external owner:
-`VK_QUEUE_FAMILY_EXTERNAL` (`FOREIGN_EXT` for dmabufs) in `VK_IMAGE_LAYOUT_GENERAL`. The backend acquires it on its
+`VK_QUEUE_FAMILY_EXTERNAL`, or `VK_QUEUE_FAMILY_FOREIGN_EXT` for dmabufs (any driver or API may use them;
+`vk_tracker::set_external` takes the owner), in `VK_IMAGE_LAYOUT_GENERAL`. The backend acquires it on its
 first use in a submission, keeping the contents, and releases it at the end of every submission. That makes every
 submission boundary a valid hand-off point. Whoever uses the resource next still has to be ordered after the work
 that wrote it, through one of:
 
 * a **timeline**: the writer signals `v` after its work, and the reader waits for `v` before its own (GPU or CPU wait);
+* a **sync_file** (Linux): the writer exports one after its work, the reader waits on it (`gs_sync_file_*`, or
+  `gs_sync_*` with DRM syncobj timeline points);
 * a **keyed mutex** (D3D11 producers, Windows only): see below;
 * nothing: game capture's KMT textures have no sync today, just as on D3D11.
 
 A new exportable texture or buffer is transitioned and released once at creation (with a short GPU wait). Its handle
 therefore never leaves the device before the resource is in the hand-off state.
+
+## Linux
+
+Extensions: `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf` with `VK_EXT_image_drm_format_modifier`,
+`VK_KHR_external_semaphore_fd` and `VK_EXT_queue_family_foreign`, each used when the device has it. The render node
+comes from `VK_EXT_physical_device_drm`; GBM (`libgbm.so.1`, loaded at run time) is opened on it on first use.
+
+**One handle type per exportable texture.** A driver offers `OPAQUE_FD` and `DMA_BUF` only as separate allocations
+(NVIDIA 580: each one's `compatibleHandleTypes` is itself alone), so `gs_texture_create_exportable` picks the type
+from the layout and flags, and exporting as the other type fails:
+
+| Texture | Allocation | Export as |
+|---|---|---|
+| single plane | Vulkan, `DRM_FORMAT_MODIFIER` tiling with every modifier that has the needed features; the driver picks (NVIDIA: a block-linear one, `LINEAR` cannot be rendered to) | `GS_HANDLE_DMABUF` |
+| NV12/P010 with `GS_RENDER_TARGET` | Vulkan, optimal tiling | `GS_HANDLE_FD` (CUDA, other Vulkan devices and processes) |
+| NV12/P010 without `GS_RENDER_TARGET` (a copy target) | a `LINEAR` dmabuf from GBM, imported | `GS_HANDLE_DMABUF` (VA-API, PipeWire, compositors) |
+
+NVIDIA lays out an NV12 image that Vulkan itself exports as a "LINEAR" dmabuf differently from what it reports
+(spike C), hence GBM for planar dmabufs. GBM's textures keep GBM's fd and export copies of it: importing with
+`VkExportMemoryAllocateInfo` (to re-export through Vulkan) gives a separate allocation on NVIDIA (Driver issues).
+`gs_shared_texture_supported(type, layout, format, false)` is true when either flag combination exports as `type`.
+`gs_sharedbuf_t` is an opaque fd (CUDA). Timelines are opaque fds.
+
+**Imports.** `GS_HANDLE_FD` needs the exporter's parameters and allocation size, as `GS_HANDLE_WIN32`.
+`GS_HANDLE_DMABUF` needs an explicit modifier (`GS_SHARED_MODIFIER_INVALID`, an implicit modifier, is refused:
+Vulkan has none) and one offset and pitch per memory plane of that modifier. All planes must be in one buffer (fds of
+the same dmabuf); disjoint planes are refused. sRGB formats fall back to their UNORM format when the modifier refuses
+`MUTABLE_FORMAT`. A render target import is refused when the modifier cannot be rendered to (NVIDIA: `LINEAR`).
+
+**Sync files.** `gs_sync_file_export` signals a binary `SYNC_FD` semaphore from a submission after all work so far
+and exports it; `gs_sync_file_wait` imports a copy temporarily and makes the next submission wait (fd -1: already
+signalled). Vulkan requires the signals that exported work waits on to be submitted already
+(VUID-VkSemaphoreGetFdInfoKHR-handleType-03254): do not export a sync_file while a `gs_timeline_wait` on a value
+nobody has submitted a signal for is pending (a later CPU signal does not count).
+
+**The existing Linux exports** (`linux-pipewire`) work on Vulkan on top of the same paths:
+
+* `gs_texture_create_from_dmabuf` imports a single-plane dmabuf (`gs_texture_import` for NV12/P010, which needs two
+  plane views). `gs_query_dmabuf_capabilities` lists the DRM formats that import with some modifier (never
+  `GS_DMABUF_FLAG_IMPLICIT_MODIFIERS_SUPPORTED`), `gs_query_dmabuf_modifiers_for_format` their modifiers.
+* `gs_sync_*` (PipeWire explicit sync) bridge DRM syncobjs through sync_files, because a Vulkan semaphore cannot
+  import a syncobj (spike D). An acquire point is waited for on the CPU until it has a fence (`WAIT_AVAILABLE`),
+  transferred to a binary syncobj and exported as a sync_file. A release point gets the sync_file of this device's
+  work, imported into a binary syncobj and transferred to the point. The syncobjs are opened on the render node.
+* `gs_texture_create_from_pixmap` returns NULL: X11 is not supported.
 
 ## Native objects (in-process only)
 
@@ -281,7 +329,17 @@ the rebuild); `test_vulkan_loss` uses it.
   never times out (see driver issues). The only race is a third party that acquires the *same* key in between;
   two-party hand-offs use different keys in each direction.
 
-## Driver issues found (RTX 4070 Laptop 621.24, Radeon 780M Adrenalin 26.11.2)
+## Driver issues found (RTX 4070 Laptop 621.24, Radeon 780M Adrenalin 26.11.2; Linux: Tesla P100, NVIDIA 580.196.07)
+
+* **NVIDIA Linux: a dmabuf imported with `VkExportMemoryAllocateInfo` is not imported.** `vkAllocateMemory` succeeds
+  but allocates new memory: Vulkan's writes never reach the dmabuf, and `vkGetMemoryFdKHR` returns a different
+  dmabuf. Validation reports nothing, and `exportFromImportedHandleTypes` claims `DMA_BUF`
+  (`repro/dmabuf-import-with-export-info`). libobs-vulkan never re-exports imported memory.
+* **NVIDIA Linux: an NV12 image Vulkan exports as a `LINEAR` dmabuf is not laid out as reported** (spike C on
+  `vulkan-interop-spikes-linux`): GBM allocates planar dmabufs.
+* **NVIDIA Linux: no P010 in GBM** (`gbm_device_is_format_supported` is false): P010 copy targets are opaque fds.
+* **NVIDIA Linux: in-process import works.** Unlike on Windows, opaque fds and dmabufs exported by this process
+  import into a second VkDevice of the same process.
 
 * **NVIDIA: D3D11 NV12 import is broken.** The chroma plane is assembled from the wrong place and the device is
   eventually lost (spike 2, `repro/d3d11-nv12-vulkan-import` on `vulkan-interop-spikes`). `gs_texture_import` refuses
@@ -317,6 +375,17 @@ layout, and a child process that receives the texture, NV12 texture and timeline
 pipe, checks them, writes and signals back. Pick the GPU with `VK_LOADER_DRIVERS_SELECT` (`*nv-vk64*`,
 `*amd-vulkan64*`). `test_vulkan_tracker` covers the queue-family acquire and release, and `test_vulkan_exports`
 checks that the null module exports every import.
+
+`test/cmocka/test_vulkan_interop_linux.cpp` is its Linux counterpart, under the validation layer with synchronization
+validation, expecting no messages: the support matrix; the dmabuf formats and modifiers linux-pipewire is offered;
+export → import on a second VkDevice ordered by a shared opaque-fd timeline (BGRA as a dmabuf with the driver's
+modifier, NV12 as an opaque fd); GBM NV12/P010 copy targets written by Vulkan and read through `mmap` at the
+described offsets and pitches (P010 reports itself unchecked where GBM has no P010); LINEAR BGRA and NV12 GBM
+buffers written on the CPU and imported (through `gs_texture_import` and `gs_texture_create_from_dmabuf`); CPU
+timelines; sync_files both ways between two devices; DRM syncobj acquire, release and CPU-signalled points
+(`gs_sync_*`); the frame buffer as an opaque fd; and a child process that gets the BGRA dmabuf, the NV12 opaque fd
+and the timeline over `SCM_RIGHTS`, checks them, writes and signals back. `test_vulkan_loss` rebuilds an exportable
+dmabuf texture, and `test_vulkan_tracker` covers the foreign owner.
 
 `test/cmocka/test_vulkan_gpu_encode.cpp` encodes through a real encoder module on the real video pipeline: a
 moving pattern carrying its frame number (top and bottom rows), a grey level and a bar derived from it, decoded back

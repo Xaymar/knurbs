@@ -26,9 +26,7 @@ target_sources(
     common_utils.h
     knurbs-qsv-plugin-main.c
     knurbs-qsv.c
-    qsv-aliases.c
-    qsv-migrate.c
-    qsv-migrate.h
+    qsv-ids.h
     QSV_Encoder.cpp
     QSV_Encoder.h
     QSV_Encoder_Internal.cpp

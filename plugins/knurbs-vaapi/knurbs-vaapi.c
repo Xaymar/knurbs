@@ -61,21 +61,6 @@ static bool hevc_vaapi_supported(void)
 }
 #endif
 
-/* Aliases from the old OBS encoder IDs. The settings didn't change, and the
- * texture and system memory variants both map to the one public ID per
- * codec. */
-static void register_encoder_aliases(void)
-{
-	obs_register_encoder_alias("ffmpeg_vaapi_tex", VAAPI_ID_H264, NULL, NULL);
-	obs_register_encoder_alias("ffmpeg_vaapi", VAAPI_ID_H264, NULL, NULL);
-	obs_register_encoder_alias("av1_ffmpeg_vaapi_tex", VAAPI_ID_AV1, NULL, NULL);
-	obs_register_encoder_alias("av1_ffmpeg_vaapi", VAAPI_ID_AV1, NULL, NULL);
-#ifdef ENABLE_HEVC
-	obs_register_encoder_alias("hevc_ffmpeg_vaapi_tex", VAAPI_ID_HEVC, NULL, NULL);
-	obs_register_encoder_alias("hevc_ffmpeg_vaapi", VAAPI_ID_HEVC, NULL, NULL);
-#endif
-}
-
 bool obs_module_load(void)
 {
 	const char *libva_env = getenv("LIBVA_DRIVER_NAME");
@@ -109,6 +94,5 @@ bool obs_module_load(void)
 	}
 #endif
 
-	register_encoder_aliases();
 	return true;
 }

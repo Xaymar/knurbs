@@ -89,11 +89,10 @@ target_link_libraries(test_source_alias PRIVATE OBS::libobs cmocka::cmocka)
 add_test(NAME test_source_alias COMMAND test_source_alias)
 set_tests_properties(test_source_alias PROPERTIES ENVIRONMENT_MODIFICATION "${_obs_runtime_env}")
 
-# Video Device Capture: migrations and backend selection, with fake backends
+# Video Device Capture: backend selection and show/hide, with fake backends
 add_executable(
   test_video_device
   test_video_device.c
-  ${CMAKE_SOURCE_DIR}/plugins/knurbs-video-device-capture/migrate.c
   ${CMAKE_SOURCE_DIR}/plugins/knurbs-video-device-capture/video-device.c
 )
 target_include_directories(
@@ -139,22 +138,6 @@ target_include_directories(test_encoder_patent_notice PRIVATE ${CMOCKA_INCLUDE_D
 target_link_libraries(test_encoder_patent_notice PRIVATE OBS::libobs cmocka::cmocka)
 
 add_test(test_encoder_patent_notice test_encoder_patent_notice)
-
-# Settings migration of the NVENC plugin; plain libobs code, so it builds
-# without the NVENC SDK.
-add_executable(test_nvenc_migrate test_nvenc_migrate.c "${CMAKE_SOURCE_DIR}/plugins/knurbs-nvenc/nvenc-migrate.c")
-target_include_directories(test_nvenc_migrate PRIVATE ${CMOCKA_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/plugins/knurbs-nvenc")
-target_link_libraries(test_nvenc_migrate PRIVATE OBS::libobs cmocka::cmocka)
-
-add_test(test_nvenc_migrate test_nvenc_migrate)
-
-# Settings migration of the QSV plugin; plain libobs code, so it builds without
-# oneVPL.
-add_executable(test_qsv_migrate test_qsv_migrate.c "${CMAKE_SOURCE_DIR}/plugins/knurbs-qsv/qsv-migrate.c")
-target_include_directories(test_qsv_migrate PRIVATE ${CMOCKA_INCLUDE_DIR} "${CMAKE_SOURCE_DIR}/plugins/knurbs-qsv")
-target_link_libraries(test_qsv_migrate PRIVATE OBS::libobs cmocka::cmocka)
-
-add_test(test_qsv_migrate test_qsv_migrate)
 
 # PCI vendor lookup of the VA-API plugin, against a fake sysfs tree.
 if(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
@@ -226,7 +209,8 @@ if(ENABLE_VULKAN)
   target_link_libraries(test_vulkan_upload PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
   add_test(test_vulkan_upload test_vulkan_upload)
 
-  # Swapchain and present on hidden Win32 windows; skips without a device or windowing.
+  # Swapchain and present on hidden Win32 windows, or Wayland toplevels on a headless weston the test starts; skips
+  # without a device or windowing.
   add_executable(test_vulkan_swapchain test_vulkan_swapchain.cpp)
   target_include_directories(test_vulkan_swapchain PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan)
   target_compile_definitions(
@@ -235,6 +219,27 @@ if(ENABLE_VULKAN)
   )
   add_dependencies(test_vulkan_swapchain libobs-vulkan)
   target_link_libraries(test_vulkan_swapchain PRIVATE OBS::libobs OBS::vma Vulkan::Headers cmocka::cmocka)
+  if(OS_LINUX)
+    # Wayland: xdg toplevels on a headless weston the test starts, read back through weston-screenshooter (PNG).
+    find_package(PkgConfig REQUIRED)
+    find_package(PNG REQUIRED)
+    pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+    pkg_get_variable(_wayland_protocols wayland-protocols pkgdatadir)
+    find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
+    set(_xdg_shell "${_wayland_protocols}/stable/xdg-shell/xdg-shell.xml")
+    set(_gen "${CMAKE_CURRENT_BINARY_DIR}/wayland")
+    add_custom_command(
+      OUTPUT "${_gen}/xdg-shell-client-protocol.h" "${_gen}/xdg-shell-protocol.c"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${_gen}"
+      COMMAND "${WAYLAND_SCANNER}" client-header "${_xdg_shell}" "${_gen}/xdg-shell-client-protocol.h"
+      COMMAND "${WAYLAND_SCANNER}" private-code "${_xdg_shell}" "${_gen}/xdg-shell-protocol.c"
+      DEPENDS "${_xdg_shell}"
+      VERBATIM
+    )
+    target_sources(test_vulkan_swapchain PRIVATE "${_gen}/xdg-shell-protocol.c" "${_gen}/xdg-shell-client-protocol.h")
+    target_include_directories(test_vulkan_swapchain PRIVATE "${_gen}")
+    target_link_libraries(test_vulkan_swapchain PRIVATE PkgConfig::WAYLAND_CLIENT PNG::PNG)
+  endif()
   add_test(test_vulkan_swapchain test_vulkan_swapchain)
 
   # Shader translation and params; the effect parser is compiled in (ep_parse is not exported). No device needed
@@ -317,6 +322,30 @@ if(ENABLE_VULKAN)
     add_dependencies(test_vulkan_interop libobs-vulkan)
     target_link_libraries(test_vulkan_interop PRIVATE OBS::libobs cmocka::cmocka d3d11 dxgi)
     add_test(test_vulkan_interop test_vulkan_interop)
+  endif()
+
+  if(OS_LINUX)
+    # Linux external memory and sync (dmabufs, GBM, opaque fds, sync_files, DRM syncobjs, SCM_RIGHTS to a child);
+    # needs a device (skips without one).
+    find_package(Libdrm REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GBM REQUIRED IMPORTED_TARGET gbm)
+    add_executable(test_vulkan_interop_linux test_vulkan_interop_linux.cpp)
+    target_include_directories(test_vulkan_interop_linux PRIVATE ${CMOCKA_INCLUDE_DIR})
+    target_compile_definitions(
+      test_vulkan_interop_linux
+      PRIVATE OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan"
+    )
+    target_compile_features(test_vulkan_interop_linux PRIVATE cxx_std_17)
+    add_dependencies(test_vulkan_interop_linux libobs-vulkan)
+    target_link_libraries(test_vulkan_interop_linux PRIVATE OBS::libobs cmocka::cmocka Libdrm::Libdrm PkgConfig::GBM)
+    add_test(test_vulkan_interop_linux test_vulkan_interop_linux)
+    set_tests_properties(
+      test_vulkan_interop_linux
+      PROPERTIES
+        ENVIRONMENT "OBS_VULKAN_VALIDATION=1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
+        SKIP_REGULAR_EXPRESSION "SKIPPED"
+    )
   endif()
 
   # Depth/stencil buffers and depth-tested drawing; needs a device (skips without one).
@@ -407,6 +436,14 @@ if(ENABLE_VULKAN)
       test_vulkan_video_compare
       PROPERTIES FIXTURES_REQUIRED "video_vulkan;video_d3d11" SKIP_REGULAR_EXPRESSION "SKIPPED"
     )
+  else()
+    # No D3D11 reference outside Windows and no golden file committed: only the render's analytic checks run. Say
+    # so in every ctest run instead of leaving the comparison out silently.
+    add_test(
+      NAME test_vulkan_video_compare
+      COMMAND "${CMAKE_COMMAND}" -E echo "SKIPPED: no D3D11 reference render on this platform"
+    )
+    set_tests_properties(test_vulkan_video_compare PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")
   endif()
 
   # Queue priority measurement only (not a test, not installed): the synthetic D3D11 foreground load. The OBS side

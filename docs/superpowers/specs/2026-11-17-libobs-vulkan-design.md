@@ -252,12 +252,13 @@ software or readback encoding paths are used.
   the shader disk cache (design only); interop (milestone 6 not started);
   the transfer queue carries no work (see Device, queues and priority).
   Devices with a single queue family get no transfer queue at all.
-- Linux is not started and untested: there are no Linux surfaces
-  (`device_swapchain_create` in `vulkan-swapchain.cpp` fails), libvulkan is
-  hard-linked (on Windows `vulkan-1.dll` is delay-loaded), so a machine
-  without it cannot even load the module, and `plugins/linux-pipewire/pipewire.c:291`
-  dereferences `gs_texture_get_obj()`, which returns NULL here
-  (`vulkan-subsystem.cpp`).
+- Linux (2026-11-23, `vulkan-backend-linux`, NVIDIA Tesla P100 headless): the Vulkan tests pass under the
+  validation layer with synchronization validation. Swapchains present to Wayland only (`VK_KHR_wayland_surface`;
+  `gs_window::display` is the `wl_surface`, the `wl_display` is libobs's platform display; X11 is refused), tested
+  against a headless weston. Interop: see `docs/graphics-interop.md`. Still open: libvulkan is hard-linked (on
+  Windows `vulkan-1.dll` is delay-loaded), so a machine without it cannot load the module; and
+  `shared/pipewire/pipewire.c` (`swap_texture_red_blue`) treats `gs_texture_get_obj()` as a GL texture name, which on
+  Vulkan is a `struct gs_vulkan_texture`.
 - The frame ring advances per submission, not per OBS frame (see Sync points):
   with several displays, `begin()` can wait on the current or previous OBS
   frame. Follow-up: advance the ring at `gs_flush` and append presents to the

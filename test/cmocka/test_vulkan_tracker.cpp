@@ -349,6 +349,39 @@ static void forget_drops_acquired_external(void **)
 	assert_true(b.images.empty());
 }
 
+// dmabufs belong to VK_QUEUE_FAMILY_FOREIGN_EXT between submissions: acquire, release and a reset keep that owner.
+static void foreign_owner_is_kept_for_acquire_release_and_reset(void **)
+{
+	vk_tracker t;
+	t.set_external(IMG(7), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	t.set_external(BUF(9), VK_QUEUE_FAMILY_FOREIGN_EXT);
+	const vk_access copy_write = {VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+				      VK_IMAGE_LAYOUT_UNDEFINED};
+	vk_barriers b;
+	t.use_image(IMG(7), 3, render, b);
+	t.use_buffer(BUF(9), 3, copy_write, b);
+	assert_int_equal(b.images.size(), 1);
+	assert_int_equal(b.buffers.size(), 1);
+	assert_int_equal(b.images[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	assert_int_equal(b.buffers[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	b = {};
+	t.release_external(3, b);
+	assert_int_equal(b.images.size(), 1);
+	assert_int_equal(b.buffers.size(), 1);
+	assert_int_equal(b.images[0].dstQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	assert_int_equal(b.buffers[0].dstQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	// Acquired again after the release, then a failed submission: still foreign.
+	b = {};
+	t.use_image(IMG(7), 3, sample, b);
+	assert_int_equal(b.images[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	t.reset();
+	b = {};
+	t.use_image(IMG(7), 3, sample, b);
+	t.use_buffer(BUF(9), 3, copy_write, b);
+	assert_int_equal(b.images[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+	assert_int_equal(b.buffers[0].srcQueueFamilyIndex, VK_QUEUE_FAMILY_FOREIGN_EXT);
+}
+
 int main()
 {
 	const struct CMUnitTest tests[] = {
@@ -371,6 +404,7 @@ int main()
 		cmocka_unit_test(external_release_returns_acquired_ones_in_general),
 		cmocka_unit_test(external_buffer_acquire_and_release),
 		cmocka_unit_test(reset_keeps_external_resources_released),
+		cmocka_unit_test(foreign_owner_is_kept_for_acquire_release_and_reset),
 		cmocka_unit_test(forget_drops_acquired_external),
 	};
 	return cmocka_run_group_tests(tests, NULL, NULL);

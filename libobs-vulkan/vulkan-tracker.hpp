@@ -30,9 +30,12 @@ public:
 	// External resources (imported, or exportable) are shared with another API, device or process. Between
 	// submissions they belong to VK_QUEUE_FAMILY_EXTERNAL in VK_IMAGE_LAYOUT_GENERAL: the first use in a submission
 	// acquires them from there (keeping the contents), release_external hands every acquired one back.
-	// `layout` is the layout the image is in when registered (GENERAL for imports).
-	void set_external(VkImage image, VkImageAspectFlags aspect, VkImageLayout layout);
-	void set_external(VkBuffer buffer);
+	// `layout` is the layout the image is in when registered (GENERAL for imports). `owner` is the queue family
+	// of the other side: VK_QUEUE_FAMILY_EXTERNAL (another Vulkan device of the same driver), or
+	// VK_QUEUE_FAMILY_FOREIGN_EXT for dmabufs, which any driver or API may use.
+	void set_external(VkImage image, VkImageAspectFlags aspect, VkImageLayout layout,
+			  uint32_t owner = VK_QUEUE_FAMILY_EXTERNAL);
+	void set_external(VkBuffer buffer, uint32_t owner = VK_QUEUE_FAMILY_EXTERNAL);
 	// Records the release of every external resource acquired since the last call; the submission must follow.
 	void release_external(uint32_t family, vk_barriers &out);
 	// After a failed submission: forgets all state (layouts restart at UNDEFINED) except that external resources
@@ -52,10 +55,11 @@ private:
 		VkAccessFlags2 write_access = 0;
 		VkPipelineStageFlags2 visible_stage = 0; // scope already covered by an emitted barrier
 		VkAccessFlags2 visible_access = 0;
-		VkPipelineStageFlags2 read_stage = 0; // readers since the last write, a later write waits for them
-		bool external = false;                // see set_external
-		bool owned = false;                   // external: acquired in the submission being recorded
-		VkImageAspectFlags aspect = 0;        // external images: aspect of their barriers
+		VkPipelineStageFlags2 read_stage = 0;      // readers since the last write, a later write waits for them
+		bool external = false;                     // see set_external
+		bool owned = false;                        // external: acquired in the submission being recorded
+		VkImageAspectFlags aspect = 0;             // external images: aspect of their barriers
+		uint32_t owner = VK_QUEUE_FAMILY_EXTERNAL; // external: the other side's queue family
 	};
 	struct source {
 		VkPipelineStageFlags2 stage;

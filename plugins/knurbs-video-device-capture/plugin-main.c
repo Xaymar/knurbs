@@ -7,7 +7,6 @@
 #include <obs-module.h>
 
 #include "video-device.h"
-#include "migrate.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("knurbs-video-device-capture", "en-US")
@@ -22,7 +21,6 @@ MODULE_EXPORT const char *obs_module_description(void)
 bool obs_module_load(void)
 {
 	obs_register_source(&video_device_capture_info);
-	vd_register_aliases();
 	return true;
 }
 
