@@ -28,6 +28,13 @@ enum class code : std::int32_t {
 // Lowercase-hyphenated name of the code ("invalid-argument"), or "unknown" for values this library doesn't know.
 KNURBS_API std::string_view to_string(code) noexcept;
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+// std::runtime_error is not exported. Deriving an exported exception from a standard exception is the sanctioned
+// case of C4275: both sides use the same C++ runtime (one toolchain per platform), so the base's layout matches.
+#pragma warning(disable : 4275)
+#endif
+
 class KNURBS_API exception : public std::runtime_error {
 	code code_;
 
@@ -37,6 +44,10 @@ public:
 
 	code value() const noexcept { return code_; }
 };
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 class KNURBS_API invalid_argument : public exception {
 public:
