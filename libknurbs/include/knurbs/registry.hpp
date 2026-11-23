@@ -51,7 +51,9 @@ public:
 // everything, and no plugin code (type virtuals and destructors included) runs while it is held.
 //
 // Every member throws error::core_gone once the core's shutdown has begun. Shutdown itself clears the registry
-// (see core), so type objects are released before the modules that own their code are unloaded.
+// (see core), after the modules are unloaded: that drops only the registry's own references, and a type stays alive
+// for as long as someone else holds it. An add or add_alias with an empty `owner_module` made from inside a
+// module's entry point is recorded as that module's (see module::registry).
 class KNURBS_API registry {
 	// Only created by core.
 	registry() noexcept = default;
@@ -61,14 +63,15 @@ public:
 	registry(const registry &) = delete;
 	registry &operator=(const registry &) = delete;
 
-	// Registers `t`, owned by the module `owner_module` (empty for none). Throws error::invalid_argument for an
-	// empty ref or an ID that is not a valid type ID, and error::already_exists when the ID is already
-	// registered or is the old ID of an alias.
+	// Registers `t`, owned by the module `owner_module`. Empty means the module whose entry point runs on this
+	// thread, if any, else none. Throws error::invalid_argument for an empty ref or an ID that is not a valid
+	// type ID, and error::already_exists when the ID is already registered or is the old ID of an alias.
 	void add(ref<type> t, std::string_view owner_module = {});
 	// Makes `old_id` find the type `new_id`. `new_id` must be a valid type ID but need not be registered yet;
 	// `old_id` is exempt from the naming rules but must not be empty. Throws error::invalid_argument for a bad
 	// `new_id`, an empty `old_id` and for an alias that would form a cycle (a chain from `new_id` that reaches
-	// `old_id`), and error::already_exists when `old_id` is a registered type or already an alias.
+	// `old_id`), and error::already_exists when `old_id` is a registered type or already an alias. An empty
+	// `owner_module` means the same as for add().
 	void add_alias(std::string_view old_id, std::string_view new_id, std::string_view owner_module = {});
 	// The type with this ID, following alias chains to their end; empty if there is none.
 	ref<type> find(std::string_view id) const;

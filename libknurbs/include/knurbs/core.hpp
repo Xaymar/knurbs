@@ -10,6 +10,7 @@
 
 namespace knurbs {
 
+class module_manager;
 class registry;
 
 namespace detail {
@@ -19,12 +20,16 @@ class core_impl;
 // The root of a libknurbs instance: it owns the logger, the threads and everything created through it. There is
 // no process-wide state, so several cores can exist side by side without interfering. Thread-safe.
 //
-// Shutdown, run by shutdown() or by the core's last release, stops the core's threads in a fixed order, the
-// destruction queue last. Between the two it clears the registry: the registry drops its own references to every type
-// and alias. A type is destroyed then only if nobody else holds it; references handed out by registry::find and
-// list keep it alive until they are released, as they do after registry::remove_module. After shutdown begins,
-// check_alive() throws error::core_gone and the destruction queue refuses new tasks. What it guarantees about
-// deferred deletes (thread::deferred_object on the destruction queue):
+// Shutdown, run by shutdown() or by the core's last release, does three things in this order:
+// 1. It unloads the modules (module_manager::unload_all): knurbs_module_unload runs for every module that did not
+//    fail, in reverse name order. The registry already refuses calls by then.
+// 2. It clears the registry: the registry drops its own references to every type and alias. A type is destroyed
+//    then only if nobody else holds it; references handed out by registry::find and list keep it alive until they
+//    are released, as they do after registry::remove_module. Module libraries are never unloaded, so such a type's
+//    code stays available.
+// 3. It stops the destruction queue, last.
+// After shutdown begins, check_alive() throws error::core_gone and the destruction queue refuses new tasks. What
+// it guarantees about deferred deletes (thread::deferred_object on the destruction queue):
 // - Every delete posted to the destruction queue before shutdown began has finished when shutdown returns. This
 //   also holds when shutdown runs on the destruction queue's own thread (for example because a deferred delete
 //   drops the last core reference): the queued deletes then run inline, before the core goes away.
@@ -60,6 +65,9 @@ public:
 	// The type registry. Its members throw error::core_gone once shutdown has begun; the reference itself stays
 	// valid for as long as the core is held.
 	knurbs::registry &registry() const;
+
+	// Finds and loads the core's modules. load() throws error::core_gone once shutdown has begun.
+	knurbs::module_manager &modules() const;
 
 	// Stops the core; see above. Idempotent. The core's last release calls it.
 	void shutdown() noexcept;

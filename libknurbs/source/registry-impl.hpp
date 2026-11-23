@@ -29,6 +29,9 @@ class registry_impl final : public registry {
 
 	// Follows aliases from `id`; the caller holds mutex_.
 	const type_entry *resolve(std::string_view id) const;
+	// `owner_module`, or if that is empty the module whose entry point runs on this thread (see
+	// module::registry).
+	std::string_view owner_or_current(std::string_view owner_module) const noexcept;
 
 public:
 	explicit registry_impl(const core &c) noexcept : core_(c) {}

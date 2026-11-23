@@ -6,6 +6,7 @@
 
 #include "knurbs/error.hpp"
 #include "knurbs/naming.hpp"
+#include "module-loader.hpp"
 
 namespace knurbs {
 
@@ -32,6 +33,11 @@ const registry_impl::type_entry *registry_impl::resolve(std::string_view id) con
 	return nullptr;
 }
 
+std::string_view registry_impl::owner_or_current(std::string_view owner_module) const noexcept
+{
+	return owner_module.empty() ? current_module_name(core_) : owner_module;
+}
+
 void registry_impl::add(ref<type> t, std::string_view owner_module)
 {
 	core_.check_alive();
@@ -50,7 +56,7 @@ void registry_impl::add(ref<type> t, std::string_view owner_module)
 	if (types_.contains(id) || aliases_.contains(id)) {
 		throw error::already_exists("registry: ID already registered: " + id);
 	}
-	types_.emplace(id, type_entry{std::move(t), kind, std::string(owner_module)});
+	types_.emplace(id, type_entry{std::move(t), kind, std::string(owner_or_current(owner_module))});
 }
 
 void registry_impl::add_alias(std::string_view old_id, std::string_view new_id, std::string_view owner_module)
@@ -80,7 +86,8 @@ void registry_impl::add_alias(std::string_view old_id, std::string_view new_id, 
 		}
 		cur = a->second.target;
 	}
-	aliases_.emplace(std::string(old_id), alias_entry{std::string(new_id), std::string(owner_module)});
+	aliases_.emplace(std::string(old_id),
+			 alias_entry{std::string(new_id), std::string(owner_or_current(owner_module))});
 }
 
 ref<type> registry_impl::find(std::string_view id) const

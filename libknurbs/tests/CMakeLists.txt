@@ -63,3 +63,37 @@ knurbs_add_test(test_registry)
 knurbs_add_test(test_locale)
 # The test data is addressed by absolute path, not relative to the working directory
 target_compile_definitions(test_locale PRIVATE KNURBS_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+
+# Fake modules for test_module, laid out like real ones: modules/<name>/bin/<prefix><name><suffix> and an empty
+# modules/<name>/data/. The loader expects CMake's MODULE prefix and suffix (see libknurbs/CMakeLists.txt).
+set(_knurbs_test_modules_dir "${CMAKE_CURRENT_BINARY_DIR}/modules")
+
+# knurbs_add_fake_module(<name> <source>): tests/modules/<source>, linked with libknurbs
+function(knurbs_add_fake_module name source)
+  add_library(${name} MODULE modules/${source})
+  # Keep char8_t on when OBS turns it off (see libknurbs/CMakeLists.txt)
+  target_compile_options(${name} PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fchar8_t>)
+  target_link_libraries(${name} PRIVATE knurbs::knurbs)
+  # The generator expression keeps multi-config generators from appending a per-configuration directory.
+  set_target_properties(
+    ${name}
+    PROPERTIES
+      FOLDER "Tests and Examples"
+      CXX_VISIBILITY_PRESET hidden
+      VISIBILITY_INLINES_HIDDEN ON
+      LIBRARY_OUTPUT_DIRECTORY "$<1:${_knurbs_test_modules_dir}/${name}/bin>"
+      RUNTIME_OUTPUT_DIRECTORY "$<1:${_knurbs_test_modules_dir}/${name}/bin>"
+  )
+  file(MAKE_DIRECTORY "${_knurbs_test_modules_dir}/${name}/data")
+  add_dependencies(knurbs-tests ${name})
+  set_property(GLOBAL APPEND PROPERTY _knurbs_fake_modules ${name})
+endfunction()
+
+knurbs_add_fake_module(fake-ok fake-ok.cpp)
+knurbs_add_fake_module(fake-throws fake-throws.cpp)
+knurbs_add_fake_module(fake-other-major fake-other-major.cpp)
+
+knurbs_add_test(test_module)
+get_property(_knurbs_fake_modules GLOBAL PROPERTY _knurbs_fake_modules)
+add_dependencies(test_module ${_knurbs_fake_modules})
+target_compile_definitions(test_module PRIVATE KNURBS_TEST_MODULES_DIR="${_knurbs_test_modules_dir}")

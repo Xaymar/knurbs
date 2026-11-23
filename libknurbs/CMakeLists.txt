@@ -31,6 +31,9 @@ target_sources(
     source/error.cpp
     source/locale.cpp
     source/log.cpp
+    source/module-loader.cpp
+    source/module-loader.hpp
+    source/module.cpp
     source/naming.cpp
     source/object.cpp
     source/platform.cpp
@@ -46,8 +49,14 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_compile_features(libknurbs PUBLIC cxx_std_23)
-target_link_libraries(libknurbs PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(libknurbs PRIVATE nlohmann_json::nlohmann_json ${CMAKE_DL_LIBS})
 target_compile_definitions(libknurbs PRIVATE KNURBS_BUILDING)
+# Modules are named <prefix><name><suffix>: CMake's names for MODULE libraries on the target platform, which the test
+# modules are built with too ("lib" and ".so" on Linux and macOS, "" and ".dll" on Windows).
+target_compile_definitions(
+  libknurbs
+  PRIVATE KNURBS_MODULE_PREFIX="${CMAKE_SHARED_MODULE_PREFIX}" KNURBS_MODULE_SUFFIX="${CMAKE_SHARED_MODULE_SUFFIX}"
+)
 # naming::check_key is compiled into the library, so its checking is controlled by the library's own definition:
 # on for Debug builds and whenever tests are built.
 target_compile_definitions(libknurbs PRIVATE $<$<CONFIG:Debug>:KNURBS_CHECK_KEYS>)
