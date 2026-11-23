@@ -76,6 +76,9 @@ void os_event_destroy(os_event_t *event)
 int os_event_wait(os_event_t *event)
 {
 	int code = 0;
+	if (!event)
+		return EINVAL;
+
 	pthread_mutex_lock(&event->mutex);
 	while (!event->signalled) {
 		code = pthread_cond_wait(&event->cond, &event->mutex);
@@ -106,6 +109,9 @@ static inline void add_ms_to_ts(struct timespec *ts, unsigned long milliseconds)
 int os_event_timedwait(os_event_t *event, unsigned long milliseconds)
 {
 	int code = 0;
+	if (!event)
+		return EINVAL;
+
 	pthread_mutex_lock(&event->mutex);
 	while (!event->signalled) {
 		struct timespec ts;
@@ -136,6 +142,8 @@ int os_event_timedwait(os_event_t *event, unsigned long milliseconds)
 int os_event_try(os_event_t *event)
 {
 	int ret = EAGAIN;
+	if (!event)
+		return EINVAL;
 
 	pthread_mutex_lock(&event->mutex);
 	if (event->signalled) {
@@ -151,6 +159,8 @@ int os_event_try(os_event_t *event)
 int os_event_signal(os_event_t *event)
 {
 	int code = 0;
+	if (!event)
+		return EINVAL;
 
 	pthread_mutex_lock(&event->mutex);
 	/* a manual event releases every waiter, as SetEvent() does on Windows */
@@ -163,6 +173,9 @@ int os_event_signal(os_event_t *event)
 
 void os_event_reset(os_event_t *event)
 {
+	if (!event)
+		return;
+
 	pthread_mutex_lock(&event->mutex);
 	event->signalled = false;
 	pthread_mutex_unlock(&event->mutex);
