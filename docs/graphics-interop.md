@@ -25,12 +25,12 @@ there (false, NULL, 0 or -1), and so does the null test module (`test/null-graph
 | `enum gs_handle_type` | What it is | Textures | Timelines | Platform |
 |---|---|---|---|---|
 | `GS_HANDLE_WIN32` | NT handle exported by Vulkan (`OPAQUE_WIN32`) | export, import | export, import | Windows |
-| `GS_HANDLE_WIN32_D3D11` | NT handle of a D3D11 texture (`MISC_SHARED_NTHANDLE`) | import | — | Windows |
-| `GS_HANDLE_WIN32_D3D11_KMT` | legacy global share handle (`MISC_SHARED`, game capture) | import | — | Windows |
-| `GS_HANDLE_WIN32_D3D12_FENCE` | NT handle of an `ID3D12Fence` / `ID3D11Fence` | — | import | Windows |
+| `GS_HANDLE_WIN32_D3D11` | NT handle of a D3D11 texture (`MISC_SHARED_NTHANDLE`) | import | â€” | Windows |
+| `GS_HANDLE_WIN32_D3D11_KMT` | legacy global share handle (`MISC_SHARED`, game capture) | import | â€” | Windows |
+| `GS_HANDLE_WIN32_D3D12_FENCE` | NT handle of an `ID3D12Fence` / `ID3D11Fence` | â€” | import | Windows |
 | `GS_HANDLE_FD` | opaque fd exported by Vulkan | export, import | export, import | Linux |
-| `GS_HANDLE_DMABUF` | dmabuf, one fd per plane, with offsets, pitches, modifier | import (export: single plane) | — | Linux |
-| `GS_HANDLE_SYNC_FD` | sync_file, binary and one-shot | — | `gs_sync_file_*` | Linux |
+| `GS_HANDLE_DMABUF` | dmabuf, one fd per plane, with offsets, pitches, modifier | import (export: single plane) | â€” | Linux |
+| `GS_HANDLE_SYNC_FD` | sync_file, binary and one-shot | â€” | `gs_sync_file_*` | Linux |
 
 `gs_shared_texture_supported(type, layout, format, import)` says whether a texture of that layout and format can be
 imported from, or exported as, a type on the current device. The Linux rows are declared but not implemented yet. The
@@ -115,6 +115,30 @@ rule on purpose and therefore stay out of this API: nothing out of process may u
 there), and in-process code must not destroy them, may use the queue only with the graphics context entered, and
 must order its work with the renderer itself (`gs_flush()` plus its own semaphores, or better a `gs_timeline_t`).
 Code that may move to another process uses the exports above instead.
+
+## Windows capture (win-capture)
+
+Game capture and window capture run on the Vulkan renderer as on D3D11. The hook side (graphics-hook, inject-helper,
+`graphics-hook-info.h`, the named objects and the shmem/shtex layouts) is unchanged, so OBS Studio's signed hook works
+with Knurbs; `test_vulkan_win_capture` runs against both (below).
+
+| Method | Path on Vulkan | Copies per frame in OBS | Sync |
+|---|---|---|---|
+| Game capture, shared texture (BGRA, BGRX, RGBA, R10G10B10A2, RGBA16F, typeless or not) | the hook's legacy D3D11 handle opened with `gs_texture_open_shared` and sampled directly | 0 (R10G10B10A2: the conversion pass D3D11 has too) | none, as on D3D11 (the hook's texture has no keyed mutex) |
+| Game capture, memory (compatibility mode, or no shared textures) | unchanged CPU upload | 1 CPU upload, as on D3D11 | the hook's mutexes, unchanged |
+| Window capture, Windows Graphics Capture | WGC delivers frames to a private D3D11 device on the renderer's adapter (by LUID); each frame is copied into one of three NT-handle, keyed-mutex textures of the frame's format (BGRA, or RGBA16F for HDR), imported once with `gs_texture_open_nt_shared` | 1 GPU copy (D3D11), as on D3D11 | keyed mutex, key 0 both ways: Vulkan holds the slot it draws until a newer frame is drawn; frames go to the other slots |
+| Window capture, BitBlt | the compatibility path (BitBlt into a DIB, then upload): Vulkan has no GDI-compatible textures | 1 CPU upload (D3D11 BitBlts into the texture's DC instead) | none |
+
+libobs-winrt (also used by display capture's WGC mode, which is still D3D11-only) keeps the private D3D11 device
+while any capture uses it. WGC frames arrive on the graphics thread (its dispatcher queue), so the slot state needs no
+lock. On a Vulkan device loss the D3D11 device and the capture session keep running; only the imported textures are
+replaced, with the next frame. If the D3D11 device is lost too, or the adapter changed, the session is recreated.
+`OBS_WINRT_TEST_HDR=1` makes WGC capture RGBA16F frames as on an HDR monitor (test hook).
+
+Hook files: on start-up win-capture copies its own graphics-hook into `%ProgramData%\obs-studio-hook` when its version
+is higher than the one there (`game-capture-file-init.c`, unchanged from OBS). Knurbs' hook is 1.8.8 and OBS Studio
+31.0.2's is 1.8.6, so running Knurbs from its install directory replaces OBS Studio's signed hook in that shared
+directory with Knurbs' unsigned one, for both programs.
 
 ## Texture encoders
 
@@ -234,9 +258,9 @@ the rebuild); `test_vulkan_loss` uses it.
 ## Tests
 
 `test/cmocka/test_vulkan_interop.cpp` runs on Windows under the validation layer with synchronization validation and
-expects no messages. It covers: D3D11 → Vulkan BGRA through KMT and NT (legacy exports and `gs_texture_import`),
+expects no messages. It covers: D3D11 â†’ Vulkan BGRA through KMT and NT (legacy exports and `gs_texture_import`),
 Vulkan writes read back by D3D11, keyed-mutex hand-off both ways with a timeout, D3D11 NV12 (exact on AMD, refused on
-NVIDIA), export → import on a second VkDevice ordered by a shared timeline (BGRA and NV12; NVIDIA asserts the driver
+NVIDIA), export â†’ import on a second VkDevice ordered by a shared timeline (BGRA and NV12; NVIDIA asserts the driver
 issue above), CPU and GPU timeline waits and signals, an `ID3D11Fence` as a timeline, the NV12/P010 frame buffer
 layout, and a child process that receives the texture, NV12 texture and timeline handles by `DuplicateHandle` over a
 pipe, checks them, writes and signals back. Pick the GPU with `VK_LOADER_DRIVERS_SELECT` (`*nv-vk64*`,
@@ -254,3 +278,14 @@ H.264 over many images (`OBS_AMF_VULKAN_TEST_HOLD=76` keeps frames held, so the 
 frames come in images AMF has not seen) on the AMD adapter; with `OBS_AMF_VULKAN_TEST_WRAP_EACH_FRAME=1` (a new
 surface per frame, as before the fix) they show AMF's stale frames (see Driver issues). A missing ready wait could not be caught at a size the validation layer runs in reasonable
 time: the GPU finishes a 640x352 frame before the encoder thread reads it.
+
+`test/cmocka/test_vulkan_win_capture.cpp` starts a producer window (the test executable itself) showing four colour
+quadrants that rotate every 200 ms, captures it through the real pipeline and reads the composited frames back as BGRA.
+Every frame must show one of the two phases (8- and 10-bit: exact colours within 4 levels, so a missing or doubled
+sRGB conversion fails; RGBA16F: the dominant channel), both must show up, the method must have taken the path above,
+and the validation layer (with synchronization validation) must report nothing. Cases: game capture of a D3D11
+swap chain in each format and in memory mode, with the producer on the renderer's adapter and the hook the producer
+loaded checked against the data dir given; WGC of a D3D11 and of a GDI window, with RGBA16F frames, while the window
+keeps resizing; BitBlt of a GDI window; game capture and WGC across a simulated device loss. Each runs on the NVIDIA
+and the AMD adapter, and on the D3D11 renderer as a reference. `KNURBS_TEST_OBS_HOOK_DIR` (an OBS Studio
+installation's `data/obs-plugins/win-capture`) adds the game capture cases against that hook.
