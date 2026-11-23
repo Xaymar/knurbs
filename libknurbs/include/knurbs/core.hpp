@@ -46,8 +46,10 @@ public:
 	// config_path or cache_path is empty.
 	static ref<core> create(options opts);
 
+	// The core's logger. It stays usable after shutdown, for as long as a reference to it is held.
 	ref<log::logger> logger() const;
-	// The queue that deferred objects of this core are deleted on. It is stopped by shutdown.
+	// The queue that deferred objects of this core are deleted on. Still returned after shutdown, but stopped:
+	// post() then throws error::core_gone.
 	ref<thread::task_queue> destruction_queue() const;
 
 	// Stops the core; see above. Idempotent. The core's last release calls it.
