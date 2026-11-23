@@ -95,6 +95,7 @@ struct options {
 	bool amf_timeline = false;
 	bool preencode = true;  // as the OBS plugin
 	int bframes = 0;
+	int skip_frame = -1; // RATE_CONTROL_SKIP_FRAME_ENABLE: -1 = left at AMF's default
 	std::string usage = "transcoding";
 	bool trace = false;
 	bool validate = false;
@@ -138,6 +139,7 @@ void usage()
 		"  --amf-timeline        AMF_CONTEXT_VULKAN_USE_TIMELINE_SEMAPHORES\n"
 		"  --preencode 0|1       (1, as OBS)\n"
 		"  --bframes N           (0)\n"
+		"  --skip-frame 0|1      set RATE_CONTROL_SKIP_FRAME_ENABLE (left at AMF's default, as OBS)\n"
 		"  --usage transcoding|lowlatency|ultralowlatency (transcoding)\n"
 		"  --stall-at F --stall-ms M [--stall-every N]   sleep M ms before frame F (and every N after)\n"
 		"  --pace MS             sleep MS per frame\n"
@@ -188,6 +190,7 @@ options parse(int argc, char **argv)
 		else if (a == "--amf-timeline") o.amf_timeline = true;
 		else if (a == "--preencode") o.preencode = num() != 0;
 		else if (a == "--bframes") o.bframes = num();
+		else if (a == "--skip-frame") o.skip_frame = num() != 0;
 		else if (a == "--usage") o.usage = next();
 		else if (a == "--stall-at") o.stall_at = num();
 		else if (a == "--stall-ms") o.stall_ms = num();
@@ -878,6 +881,8 @@ int main(int argc, char **argv)
 		AMFC(enc->SetProperty(AMF_VIDEO_ENCODER_HEVC_PEAK_BITRATE, (amf_int64)20000000));
 		enc->SetProperty(AMF_VIDEO_ENCODER_HEVC_LOWLATENCY_MODE, false);
 		enc->SetProperty(AMF_VIDEO_ENCODER_HEVC_PREENCODE_ENABLE, o.preencode);
+		if (o.skip_frame >= 0)
+			AMFC(enc->SetProperty(AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_SKIP_FRAME_ENABLE, o.skip_frame != 0));
 	} else {
 		AMFC(enc->SetProperty(AMF_VIDEO_ENCODER_USAGE,
 				      o.usage == "lowlatency"	     ? AMF_VIDEO_ENCODER_USAGE_LOW_LATENCY
@@ -891,8 +896,19 @@ int main(int argc, char **argv)
 		enc->SetProperty(AMF_VIDEO_ENCODER_LOWLATENCY_MODE, false);
 		enc->SetProperty(AMF_VIDEO_ENCODER_PREENCODE_ENABLE, o.preencode);
 		enc->SetProperty(AMF_VIDEO_ENCODER_B_PIC_PATTERN, (amf_int64)o.bframes);
+		if (o.skip_frame >= 0)
+			AMFC(enc->SetProperty(AMF_VIDEO_ENCODER_RATE_CONTROL_SKIP_FRAME_ENABLE, o.skip_frame != 0));
 	}
 	AMFC(enc->Init(amf::AMF_SURFACE_NV12, o.w, o.h));
+	{
+		bool skip = false;
+		AMF_RESULT r = enc->GetProperty(hevc ? AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_SKIP_FRAME_ENABLE
+						     : AMF_VIDEO_ENCODER_RATE_CONTROL_SKIP_FRAME_ENABLE,
+					      &skip);
+		if (!o.quiet)
+			printf("rate-control skip frame: %s (%s)\n", r == AMF_OK ? (skip ? "on" : "off") : "unknown",
+			       o.skip_frame >= 0 ? "set" : "AMF default");
+	}
 
 	// frames
 	const VkDeviceSize frame_bytes = (VkDeviceSize)o.w * o.h * 3 / 2;

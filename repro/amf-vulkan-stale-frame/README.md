@@ -91,6 +91,7 @@ frame, never destroyed.
 | `--producer same` (ring of 8, timeline host wait) | 2/10 | 1–3 stale frames per failing run, 2–5 back |
 | … `--sync fence` / `idle` / `devidle` / `gpu` (semaphore in `AMFVulkanSurface::Sync`) / `none` | all fail on the amplified base (6/6 each) | sync is irrelevant |
 | … `--stall-at 30 --stall-ms 300 --stall-every 20` | 2/10 | |
+| amplified `--skip-frame 0` (rate-control frame skipping set off; it is off by default for transcoding, as the program prints), also HEVC; `--producer same --skip-frame 0` | 6/6 each; 2/6 | not frame skipping |
 | `--ring 1`, `--ring 2` | 0/6 each | a stale cache hit can only point at the same image or its twin |
 | `--ring 4` / `--ring 16` | 1/6 / 5/6 | more distinct images, more collisions |
 | `--ring 0` (fresh images, destroyed on release) | 6/6 | |
