@@ -47,8 +47,11 @@ static void file_io_test(void **state)
 	assert_string_equal(utf8, text);
 	bfree(utf8);
 	rewind(f);
+	/* whether non-ASCII text converts depends on the locale (in the C locale glibc converts none of it) */
 	char *mbs = NULL;
-	assert_true(os_fread_mbs(f, &mbs) > 0);
+	size_t mbs_len = os_fread_mbs(f, &mbs);
+	assert_non_null(mbs);
+	assert_int_equal(strlen(mbs), mbs_len);
 	bfree(mbs);
 	fclose(f);
 
@@ -67,6 +70,12 @@ static void file_io_test(void **state)
 	read = os_quick_read_mbs_file("mbs.txt");
 	assert_string_equal(read, "plain");
 	bfree(read);
+	f = os_fopen("mbs.txt", "rb");
+	assert_non_null(f);
+	assert_int_equal(os_fread_mbs(f, &mbs), 5);
+	assert_string_equal(mbs, "plain");
+	bfree(mbs);
+	fclose(f);
 
 	/* empty and missing files */
 	write_text("empty.txt", "");
@@ -131,6 +140,44 @@ static void conversion_test(void **state)
 	assert_null(wptr);
 	assert_int_equal(os_wcs_to_utf8_ptr(NULL, 0, &ptr), 0);
 	assert_null(ptr);
+
+	/* Regression: text the current locale cannot convert ((size_t)-1 from mbstowcs/wcstombs) made the *_ptr
+	 * helpers allocate 0 bytes, which crashes. Whether it converts depends on the locale and platform; the
+	 * result is always a terminated string of the returned length. */
+	size_t n = os_mbs_to_wcs_ptr("\xff", 0, &wptr);
+	assert_non_null(wptr);
+	assert_int_equal(wcslen(wptr), n);
+	bfree(wptr);
+	n = os_wcs_to_mbs_ptr(L"\x20ac", 0, &ptr);
+	assert_non_null(ptr);
+	assert_int_equal(strlen(ptr), n);
+	bfree(ptr);
+	n = os_mbs_to_utf8_ptr("\xff", 0, &ptr);
+	assert_non_null(ptr);
+	assert_int_equal(strlen(ptr), n);
+	bfree(ptr);
+	n = os_mbs_to_wcs("\xff", 0, wide, 16);
+	assert_int_equal(wcslen(wide), n);
+	n = os_wcs_to_mbs(L"\x20ac", 0, back, 16);
+	assert_int_equal(strlen(back), n);
+
+	/* Regression: a result that filled the destination wrote its terminator one past the end */
+	struct {
+		wchar_t text[3];
+		wchar_t guard;
+	} wbuf = {{0}, L'G'};
+	struct {
+		char text[3];
+		char guard;
+	} cbuf = {{0}, 'G'};
+	n = os_utf8_to_wcs("abc", 0, wbuf.text, 3);
+	assert_true(n < 3 && wcslen(wbuf.text) == n && wbuf.guard == L'G');
+	n = os_mbs_to_wcs("abc", 0, wbuf.text, 3);
+	assert_true(n < 3 && wcslen(wbuf.text) == n && wbuf.guard == L'G');
+	n = os_wcs_to_utf8(L"abc", 0, cbuf.text, 3);
+	assert_true(n < 3 && strlen(cbuf.text) == n && cbuf.guard == 'G');
+	n = os_wcs_to_mbs(L"abc", 0, cbuf.text, 3);
+	assert_true(n < 3 && strlen(cbuf.text) == n && cbuf.guard == 'G');
 
 	assert_int_equal(os_mbs_to_wcs("abc", 0, wide, 16), 3);
 	assert_int_equal(os_wcs_to_mbs(L"abc", 0, back, 16), 3);
@@ -278,21 +325,33 @@ static void module_test(void **state)
 {
 	UNUSED_PARAMETER(state);
 
-	void *kernel = os_dlopen("kernel32");
-	assert_non_null(kernel);
-	assert_non_null(os_dlsym(kernel, "GetTickCount"));
-	assert_null(os_dlsym(kernel, "NoSuchFunction"));
-	os_dlclose(kernel);
+	/* a system library that every process can load */
+#ifdef _WIN32
+	void *lib = os_dlopen("kernel32");
+	const char *func = "GetTickCount";
+#else
+	void *lib = os_dlopen("libm.so.6");
+	const char *func = "cos";
+#endif
+	assert_non_null(lib);
+	assert_non_null(os_dlsym(lib, func));
+	assert_null(os_dlsym(lib, "NoSuchFunction"));
+	os_dlclose(lib);
 
 	assert_null(os_dlopen("no-such-module"));
 	assert_null(os_dlopen("no-such-dir/no-such-module"));
 	assert_null(os_dlopen(NULL));
 	os_dlclose(NULL);
 
+#ifdef _WIN32
 	assert_false(os_is_obs_plugin("no-such-plugin.dll"));
 	char *exe = os_get_executable_path_ptr("test_util_platform.exe");
 	assert_false(os_is_obs_plugin(exe));
 	bfree(exe);
+#else
+	/* only Windows inspects the file; everywhere else any path counts as a plugin */
+	assert_true(os_is_obs_plugin("no-such-plugin.so"));
+#endif
 }
 
 static void system_test(void **state)

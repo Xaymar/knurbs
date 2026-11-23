@@ -688,7 +688,8 @@ void dstr_depad(struct dstr *str)
 void dstr_left(struct dstr *dst, const struct dstr *str, const size_t pos)
 {
 	dstr_resize(dst, pos);
-	if (dst != str)
+	/* resizing to 0 frees dst, and memcpy() must not get a NULL pointer even for 0 bytes */
+	if (dst != str && pos)
 		memcpy(dst->array, str->array, pos);
 }
 

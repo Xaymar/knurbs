@@ -76,6 +76,9 @@ void os_event_destroy(os_event_t *event)
 int os_event_wait(os_event_t *event)
 {
 	int code = 0;
+	if (!event)
+		return EINVAL;
+
 	pthread_mutex_lock(&event->mutex);
 	while (!event->signalled) {
 		code = pthread_cond_wait(&event->cond, &event->mutex);
@@ -106,6 +109,9 @@ static inline void add_ms_to_ts(struct timespec *ts, unsigned long milliseconds)
 int os_event_timedwait(os_event_t *event, unsigned long milliseconds)
 {
 	int code = 0;
+	if (!event)
+		return EINVAL;
+
 	pthread_mutex_lock(&event->mutex);
 	while (!event->signalled) {
 		struct timespec ts;
@@ -136,6 +142,8 @@ int os_event_timedwait(os_event_t *event, unsigned long milliseconds)
 int os_event_try(os_event_t *event)
 {
 	int ret = EAGAIN;
+	if (!event)
+		return EINVAL;
 
 	pthread_mutex_lock(&event->mutex);
 	if (event->signalled) {
@@ -151,9 +159,12 @@ int os_event_try(os_event_t *event)
 int os_event_signal(os_event_t *event)
 {
 	int code = 0;
+	if (!event)
+		return EINVAL;
 
 	pthread_mutex_lock(&event->mutex);
-	code = pthread_cond_signal(&event->cond);
+	/* a manual event releases every waiter, as SetEvent() does on Windows */
+	code = event->manual ? pthread_cond_broadcast(&event->cond) : pthread_cond_signal(&event->cond);
 	event->signalled = true;
 	pthread_mutex_unlock(&event->mutex);
 
@@ -162,6 +173,9 @@ int os_event_signal(os_event_t *event)
 
 void os_event_reset(os_event_t *event)
 {
+	if (!event)
+		return;
+
 	pthread_mutex_lock(&event->mutex);
 	event->signalled = false;
 	pthread_mutex_unlock(&event->mutex);
@@ -221,13 +235,15 @@ struct os_sem_data {
 
 int os_sem_init(os_sem_t **sem, int value)
 {
-	sem_t new_sem;
-	int ret = sem_init(&new_sem, 0, value);
-	if (ret != 0)
+	/* a sem_t must be used where sem_init() put it: POSIX leaves a copy of one undefined */
+	struct os_sem_data *data = bzalloc(sizeof(struct os_sem_data));
+	int ret = sem_init(&data->sem, 0, value);
+	if (ret != 0) {
+		bfree(data);
 		return ret;
+	}
 
-	*sem = bzalloc(sizeof(struct os_sem_data));
-	(*sem)->sem = new_sem;
+	*sem = data;
 	return 0;
 }
 

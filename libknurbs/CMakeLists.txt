@@ -1,0 +1,133 @@
+cmake_minimum_required(VERSION 3.28...3.30)
+
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  # Standalone build: cmake -S libknurbs -B build-knurbs
+  project(knurbs VERSION 0.1.0 LANGUAGES C CXX)
+  enable_testing()
+  option(KNURBS_BUILD_TESTS "Build the libknurbs unit tests" ON)
+else()
+  # Part of the OBS build: tests follow ENABLE_UNIT_TESTS
+  if(ENABLE_UNIT_TESTS)
+    set(KNURBS_BUILD_TESTS ON)
+  else()
+    set(KNURBS_BUILD_TESTS OFF)
+  endif()
+endif()
+
+include(GNUInstallDirs)
+
+find_package(nlohmann_json 3.11 REQUIRED)
+
+# Parts of libc++ live in macOS itself, so C++23 library features carry a minimum
+# OS version. std::format needs the floating-point std::to_chars from macOS 13.3.
+# Raise the deployment target for libknurbs and its tests only, never lower it.
+set(KNURBS_MACOS_MINIMUM 13.3)
+if(APPLE AND (NOT CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS KNURBS_MACOS_MINIMUM))
+  set(CMAKE_OSX_DEPLOYMENT_TARGET ${KNURBS_MACOS_MINIMUM})
+endif()
+
+# The Xcode generator applies CMAKE_XCODE_ATTRIBUTE_* project-wide, so each target in <dir> gets its own.
+function(knurbs_apply_macos_minimum dir)
+  if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_EQUAL KNURBS_MACOS_MINIMUM)
+    get_property(targets DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(target IN LISTS targets)
+      get_target_property(type ${target} TYPE)
+      if(NOT type STREQUAL "INTERFACE_LIBRARY" AND NOT type STREQUAL "UTILITY")
+        set_property(TARGET ${target} PROPERTY XCODE_ATTRIBUTE_MACOSX_DEPLOYMENT_TARGET ${KNURBS_MACOS_MINIMUM})
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+add_library(libknurbs SHARED)
+add_library(knurbs::knurbs ALIAS libknurbs)
+
+target_sources(
+  libknurbs
+  PRIVATE
+    source/c/c-guard.hpp
+    source/c/core.cpp
+    source/c/data.cpp
+    source/c/log.cpp
+    source/c/module.cpp
+    source/c/object.cpp
+    source/c/properties.cpp
+    source/c/registry.cpp
+    source/core-impl.hpp
+    source/core.cpp
+    source/data-impl.hpp
+    source/data.cpp
+    source/error.cpp
+    source/locale.cpp
+    source/log.cpp
+    source/module-loader.cpp
+    source/module-loader.hpp
+    source/module.cpp
+    source/naming.cpp
+    source/object.cpp
+    source/platform.cpp
+    source/properties.cpp
+    source/registry-impl.hpp
+    source/registry.cpp
+    source/thread.cpp
+    source/version.cpp
+)
+
+target_include_directories(
+  libknurbs
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+target_compile_features(libknurbs PUBLIC cxx_std_23)
+target_link_libraries(libknurbs PRIVATE nlohmann_json::nlohmann_json ${CMAKE_DL_LIBS})
+target_compile_definitions(libknurbs PRIVATE KNURBS_BUILDING)
+# Modules are named <prefix><name><suffix>: CMake's names for MODULE libraries on the target platform, which the test
+# modules are built with too ("lib" and ".so" on Linux and macOS, "" and ".dll" on Windows).
+target_compile_definitions(
+  libknurbs
+  PRIVATE KNURBS_MODULE_PREFIX="${CMAKE_SHARED_MODULE_PREFIX}" KNURBS_MODULE_SUFFIX="${CMAKE_SHARED_MODULE_SUFFIX}"
+)
+# naming::check_key is compiled into the library, so its checking is controlled by the library's own definition:
+# on for Debug builds and whenever tests are built.
+target_compile_definitions(libknurbs PRIVATE $<$<CONFIG:Debug>:KNURBS_CHECK_KEYS>)
+if(KNURBS_BUILD_TESTS)
+  target_compile_definitions(libknurbs PRIVATE KNURBS_CHECK_KEYS)
+endif()
+
+if(MSVC)
+  # /EHs without c: module entry points are extern "C" and may throw (the loader catches it, see knurbs/module.hpp),
+  # which /EHc makes undefined. /EHc- clears the c of the /EHsc in CMake's default CMAKE_CXX_FLAGS. PUBLIC, so modules
+  # built against libknurbs get it too. The C++ options are for C++ only, so C modules and tests do not get them.
+  target_compile_options(libknurbs PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:/EHs;/EHc-;/permissive-;/Zc:__cplusplus>" /utf-8)
+else()
+  target_compile_options(libknurbs PRIVATE -Wall -Wextra)
+endif()
+
+# OBS adds -fno-char8_t for Clang (directory-wide on macOS) and /Zc:char8_t- for MSVC from C++20 on; libknurbs needs
+# char8_t, and target options come last.
+target_compile_options(
+  libknurbs
+  PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fchar8_t> $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:char8_t>
+)
+
+set_target_properties(
+  libknurbs
+  PROPERTIES OUTPUT_NAME knurbs VERSION 0.1.0 SOVERSION 0 CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
+)
+
+# Installed only by the standalone build. Nothing in the OBS build uses libknurbs yet, and its install paths would
+# put an unused library into the OBS packages (outside bin/64bit on Windows) and its headers into OBS's include/knurbs.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  install(DIRECTORY include/knurbs DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  install(
+    TARGETS libknurbs
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+endif()
+
+if(KNURBS_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
+
+knurbs_apply_macos_minimum("${CMAKE_CURRENT_SOURCE_DIR}")

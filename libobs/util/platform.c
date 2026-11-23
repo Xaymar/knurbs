@@ -348,13 +348,19 @@ size_t os_mbs_to_wcs(const char *str, size_t len, wchar_t *dst, size_t dst_size)
 		return 0;
 
 	out_len = dst ? (dst_size - 1) : mbstowcs(NULL, str, 0);
+	/* (size_t)-1: str is not valid in the current locale; it converts to an empty string */
+	if (out_len == (size_t)-1)
+		out_len = 0;
 
 	if (dst) {
 		if (!dst_size)
 			return 0;
 
-		if (out_len)
-			out_len = mbstowcs(dst, str, out_len + 1);
+		if (out_len) {
+			out_len = mbstowcs(dst, str, out_len);
+			if (out_len == (size_t)-1)
+				out_len = 0;
+		}
 
 		dst[out_len] = 0;
 	}
@@ -378,7 +384,7 @@ size_t os_utf8_to_wcs(const char *str, size_t len, wchar_t *dst, size_t dst_size
 			return 0;
 
 		if (out_len)
-			out_len = utf8_to_wchar(str, in_len, dst, out_len + 1, 0);
+			out_len = utf8_to_wchar(str, in_len, dst, out_len, 0);
 
 		dst[out_len] = 0;
 	}
@@ -396,13 +402,19 @@ size_t os_wcs_to_mbs(const wchar_t *str, size_t len, char *dst, size_t dst_size)
 		return 0;
 
 	out_len = dst ? (dst_size - 1) : wcstombs(NULL, str, 0);
+	/* (size_t)-1: str has a character the current locale cannot represent; it converts to an empty string */
+	if (out_len == (size_t)-1)
+		out_len = 0;
 
 	if (dst) {
 		if (!dst_size)
 			return 0;
 
-		if (out_len)
-			out_len = wcstombs(dst, str, out_len + 1);
+		if (out_len) {
+			out_len = wcstombs(dst, str, out_len);
+			if (out_len == (size_t)-1)
+				out_len = 0;
+		}
 
 		dst[out_len] = 0;
 	}

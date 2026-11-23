@@ -394,6 +394,9 @@ static void substr_test(void **state)
 
 	dstr_left(&out, &str, 3);
 	assert_string_equal(out.array, "pad");
+	/* Regression: passed the freed (NULL) array to memcpy() (undefined, flagged by UBSan) */
+	dstr_left(&out, &str, 0);
+	assert_true(dstr_is_empty(&out));
 	dstr_mid(&out, &str, 1, 3);
 	assert_string_equal(out.array, "add");
 	dstr_right(&out, &str, 3);

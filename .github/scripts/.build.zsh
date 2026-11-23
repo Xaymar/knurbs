@@ -153,10 +153,12 @@ build() {
         }
       }
 
+      # Nothing in obs-studio depends on libknurbs yet: build it explicitly so AppleClang and libc++ compile it.
       local -a build_args=(
         ONLY_ACTIVE_ARCH=NO
         -project obs-studio.xcodeproj
         -target obs-studio
+        -target libknurbs
         -destination "generic/platform=macOS,name=Any Mac"
         -configuration ${config}
         -parallelizeTargets

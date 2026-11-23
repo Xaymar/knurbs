@@ -141,6 +141,10 @@ size_t utf8_to_wchar(const char *in, size_t insize, wchar_t *out, size_t outsize
 	lim = (insize != 0) ? (p + insize) : (unsigned char *)-1;
 	wlim = out == NULL ? NULL : out + outsize;
 
+	/* a leading BOM is not part of the text, as on Windows */
+	if ((insize == 0 || insize >= 3) && p[0] == 0xef && p[1] == 0xbb && p[2] == 0xbf)
+		p += 3;
+
 	for (; p < lim; p += n) {
 		if (!*p && insize == 0)
 			break;

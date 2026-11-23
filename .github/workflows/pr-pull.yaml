@@ -26,6 +26,13 @@ jobs:
     permissions:
       contents: read
 
+  test-project:
+    name: Test 🧪
+    uses: ./.github/workflows/test-project.yaml
+    secrets: inherit
+    permissions:
+      contents: read
+
   compatibility-validation:
     name: Validate Compatibility 🕵️
     if: github.base_ref == 'master'
