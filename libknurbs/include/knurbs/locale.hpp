@@ -25,7 +25,8 @@ public:
 	// Reads <dir>/<locale>.ini over <dir>/<fallback>.ini. A file holds lines of the form key="value" (UTF-8, an
 	// optional BOM is skipped); inside a value `\n`, `\"` and `\\` are escapes and other backslash sequences are
 	// kept as written. Empty lines, lines starting with '#' or ';', lines without '=' and lines whose value isn't
-	// quoted are ignored. A missing file for `locale` is fine; a missing or unreadable fallback file throws
+	// quoted are ignored. `locale` and `fallback` must be valid keys (naming::is_valid_key, checked in every build,
+	// so they cannot name a path outside `dir`), else error::invalid_argument. A missing file for `locale` is fine; a missing or unreadable fallback file throws
 	// error::io.
 	static ref<text_table> load(const std::filesystem::path &dir, std::string_view locale,
 				    std::string_view fallback = "en-us");

@@ -66,6 +66,15 @@ static void test_locale_syntax(void **)
 	assert_string_equal(std::string(table->get("last")).c_str(), "end");
 }
 
+static void test_locale_rejects_bad_names(void **)
+{
+	const char *dir = KNURBS_TEST_DATA_DIR "/locale";
+	for (const char *bad : {"../x", "/etc/x", "de_DE", ""}) {
+		KNURBS_ASSERT_THROWS(text_table::load(dir, bad), error::invalid_argument);
+		KNURBS_ASSERT_THROWS(text_table::load(dir, "de-de", bad), error::invalid_argument);
+	}
+}
+
 int main()
 {
 	const struct CMUnitTest tests[] = {
@@ -73,6 +82,7 @@ int main()
 		cmocka_unit_test(test_locale_missing_fallback_throws),
 		cmocka_unit_test(test_locale_missing_requested_is_fine),
 		cmocka_unit_test(test_locale_syntax),
+		cmocka_unit_test(test_locale_rejects_bad_names),
 	};
 	return cmocka_run_group_tests(tests, nullptr, nullptr);
 }

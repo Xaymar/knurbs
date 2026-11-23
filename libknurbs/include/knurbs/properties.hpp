@@ -73,7 +73,8 @@ public:
 	bool click();
 };
 
-// An ordered description of the settings of an object, such as a source or a filter. Thread-safe.
+// An ordered description of the settings of an object, such as a source or a filter. Thread-safe, except that two
+// threads concurrently adding each other as groups can form a cycle; callers must not do that.
 //
 // Callbacks run without any internal lock held and while a ref<properties> keeps this object alive, so a callback
 // may call find, list and add_* on the same properties, and may drop the caller's last reference to it.

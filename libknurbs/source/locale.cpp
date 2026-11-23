@@ -1,5 +1,6 @@
 #include "knurbs/locale.hpp"
 
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -97,6 +98,10 @@ void parse(std::string_view content, detail::text_table_impl &table)
 // False if the file can't be opened.
 bool load_file(const std::filesystem::path &path, detail::text_table_impl &table)
 {
+	std::error_code ec;
+	if (!std::filesystem::is_regular_file(path, ec)) {
+		return false;
+	}
 	std::ifstream file(path, std::ios::binary);
 	if (!file) {
 		return false;
@@ -111,7 +116,6 @@ bool load_file(const std::filesystem::path &path, detail::text_table_impl &table
 
 std::filesystem::path locale_file(const std::filesystem::path &dir, std::string_view name)
 {
-	naming::check_key(name);
 	return dir / platform::path_from_utf8(std::string(name) + ".ini");
 }
 
@@ -119,6 +123,12 @@ std::filesystem::path locale_file(const std::filesystem::path &dir, std::string_
 
 ref<text_table> text_table::load(const std::filesystem::path &dir, std::string_view locale, std::string_view fallback)
 {
+	// The names become part of a path, so they are checked in every build, not only with KNURBS_CHECK_KEYS.
+	for (std::string_view name : {locale, fallback}) {
+		if (!naming::is_valid_key(name)) {
+			throw error::invalid_argument("invalid locale: " + std::string(name));
+		}
+	}
 	auto table = make<detail::text_table_impl>();
 
 	std::filesystem::path fallback_path = locale_file(dir, fallback);
