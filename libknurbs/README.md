@@ -15,7 +15,8 @@ The C++23 core library of Knurbs. It is built beside libobs and ships as a share
 
 | Feature | Header | Used in |
 | ------- | ------ | ------- |
-|         |        |         |
+| `std::move_only_function` | `<functional>` | `knurbs/log.hpp` (log sinks) |
+| `std::format`, `std::format_string` | `<format>` | `knurbs/log.hpp` (logger formatting helpers) |
 
 ## Building standalone
 
