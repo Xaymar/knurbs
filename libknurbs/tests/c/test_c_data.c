@@ -222,15 +222,15 @@ static void test_c_data_array(void **state)
 static int g_calls;
 static int g_frees;
 static int g_expected_param;
+/* Checked by the tests after the call: an assertion that fails inside a callback would longjmp through C++ frames */
+static bool g_callback_ok;
 
 static bool on_click(knurbs_properties_t *properties, knurbs_property_t *property, void *param)
 {
 	g_calls++;
-	assert_ptr_equal(param, &g_expected_param);
-	assert_non_null(properties);
 	char *id = NULL;
-	assert_int_equal(knurbs_property_get_id(property, &id), KNURBS_OK);
-	assert_string_equal(id, "reset");
+	g_callback_ok = param == &g_expected_param && properties != NULL &&
+			knurbs_property_get_id(property, &id) == KNURBS_OK && id != NULL && strcmp(id, "reset") == 0;
 	knurbs_free(id);
 	return true;
 }
@@ -239,17 +239,17 @@ static bool on_modified(knurbs_properties_t *properties, knurbs_property_t *prop
 			void *param)
 {
 	g_calls++;
-	assert_ptr_equal(param, &g_expected_param);
-	assert_non_null(properties);
-	assert_non_null(property);
 	int64_t value = 0;
-	assert_int_equal(knurbs_data_get_int(settings, "gain", &value), KNURBS_OK);
+	g_callback_ok = param == &g_expected_param && properties != NULL && property != NULL &&
+			knurbs_data_get_int(settings, "gain", &value) == KNURBS_OK;
 	return value > 5;
 }
 
+static bool g_free_param_ok = true;
+
 static void count_free(void *param)
 {
-	assert_ptr_equal(param, &g_expected_param);
+	g_free_param_ok = g_free_param_ok && param == &g_expected_param;
 	g_frees++;
 }
 
@@ -275,6 +275,7 @@ static void test_c_properties_callback(void **state)
 	assert_int_equal(knurbs_properties_notify_modified(props, "gain", settings, &result), KNURBS_OK);
 	assert_true(result);
 	assert_int_equal(g_calls, 1);
+	assert_true(g_callback_ok);
 
 	assert_int_equal(knurbs_data_set_int(settings, "gain", 1), KNURBS_OK);
 	assert_int_equal(knurbs_properties_notify_modified(props, "gain", settings, &result), KNURBS_OK);
@@ -297,16 +298,23 @@ static void test_c_properties_callback(void **state)
 	assert_int_equal(knurbs_properties_set_modified(props, "Bad Id", on_modified, &g_expected_param, count_free),
 			 KNURBS_ERROR_INVALID_ARGUMENT);
 	assert_int_equal(g_frees, 2);
-	assert_int_equal(knurbs_properties_set_modified(props, "gain", NULL, &g_expected_param, count_free),
-			 KNURBS_ERROR_INVALID_ARGUMENT);
-	assert_int_equal(g_frees, 3);
+	/* A NULL callback clears it and frees the parameter at once */
+	assert_int_equal(knurbs_properties_set_modified(props, "gain", on_modified, &g_expected_param, count_free),
+			 KNURBS_OK);
+	assert_int_equal(knurbs_properties_set_modified(props, "gain", NULL, &g_expected_param, count_free), KNURBS_OK);
+	assert_int_equal(g_frees, 5);
+	result = true;
+	assert_int_equal(knurbs_properties_notify_modified(props, "gain", settings, &result), KNURBS_OK);
+	assert_false(result);
+	assert_int_equal(g_calls, 2);
 	assert_int_equal(knurbs_properties_set_modified(props, "other", on_modified, &g_expected_param, NULL),
 			 KNURBS_OK);
 
 	knurbs_release((knurbs_object_t *)settings);
 	knurbs_release((knurbs_object_t *)gain);
 	knurbs_release((knurbs_object_t *)props);
-	assert_int_equal(g_frees, 4);
+	assert_int_equal(g_frees, 5);
+	assert_true(g_free_param_ok);
 }
 
 static void test_c_properties_button_and_list(void **state)
@@ -326,6 +334,7 @@ static void test_c_properties_button_and_list(void **state)
 	assert_int_equal(knurbs_property_click(button, &result), KNURBS_OK);
 	assert_true(result);
 	assert_int_equal(g_calls, 1);
+	assert_true(g_callback_ok);
 
 	knurbs_property_kind kind = KNURBS_PROPERTY_NOTICE;
 	assert_int_equal(knurbs_property_get_kind(button, &kind), KNURBS_OK);

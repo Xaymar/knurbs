@@ -23,8 +23,9 @@ extern "C" {
  *  - An object that comes out is a new reference, released with knurbs_release.
  *  - An object that goes in (set_object, push_back, ...) gets a new reference from the library; the caller keeps
  *    and later releases its own.
- *  - Errors are those of the C++ member: a missing key is KNURBS_ERROR_NOT_FOUND, a bad key or a value of another
- *    type is KNURBS_ERROR_INVALID_ARGUMENT, and so on. knurbs_last_error has the message. */
+ *  - Errors are those of the C++ member: a missing key is KNURBS_ERROR_NOT_FOUND, a value of another type is
+ *    KNURBS_ERROR_INVALID_ARGUMENT, and so is a bad key in setters where the library checks keys (Debug and test
+ *    builds, see naming::check_key); getters never check keys and report NOT_FOUND. knurbs_last_error has the message. */
 typedef struct knurbs_data knurbs_data_t;
 typedef struct knurbs_data_array knurbs_data_array_t;
 

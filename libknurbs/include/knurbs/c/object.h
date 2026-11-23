@@ -3,8 +3,6 @@
 #include "knurbs/c/export.h"
 #include "knurbs/c/result.h"
 
-#include <stddef.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif

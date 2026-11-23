@@ -102,8 +102,8 @@ get_property(_knurbs_fake_modules GLOBAL PROPERTY _knurbs_fake_modules)
 add_dependencies(test_module ${_knurbs_fake_modules})
 target_compile_definitions(test_module PRIVATE KNURBS_TEST_MODULES_DIR="${_knurbs_test_modules_dir}")
 
-# The C API tests include the C headers, compiled as C11 with -pedantic
+# C11 with -pedantic: includes the C headers for objects, core, logging and modules
 knurbs_add_test(test_c_object C)
 
-# The C API for data and properties (also compiled as C11)
+# C11 with -pedantic: includes the C headers for data and properties
 knurbs_add_test(test_c_data C)

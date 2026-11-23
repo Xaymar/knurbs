@@ -219,16 +219,16 @@ knurbs_result knurbs_properties_set_modified(knurbs_properties_t *handle, const 
 					     void (*free_param)(void *))
 {
 	return detail::c_guard([&] {
-		// First, so that free_param runs for every failure below
+		// First, so that free_param runs for every failure below, and at once when the callback is cleared
 		detail::c_callback_param owner(param, free_param);
-		if (!callback) {
-			detail::c_null_argument("callback");
+		std::move_only_function<bool(properties &, property &, data &)> function;
+		if (callback) {
+			function = [callback, owner = std::move(owner)](properties &props, property &prop,
+									data &settings) {
+				return callback(view(props), view(prop), view(settings), owner.get());
+			};
 		}
-		self(handle).set_modified(detail::c_text(id, "id"),
-					  [callback, owner = std::move(owner)](properties &props, property &prop,
-									       data &settings) {
-						  return callback(view(props), view(prop), view(settings), owner.get());
-					  });
+		self(handle).set_modified(detail::c_text(id, "id"), std::move(function));
 	});
 }
 

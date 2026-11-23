@@ -135,6 +135,7 @@ inline void c_dup_strings(const std::vector<std::string> &strings, char ***out, 
 	if (strings.empty()) {
 		return;
 	}
+	// No overflow check: the sizes of keys of a settings tree are far from SIZE_MAX
 	std::size_t size = strings.size() * sizeof(char *);
 	for (const std::string &s : strings) {
 		size += s.size() + 1;

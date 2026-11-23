@@ -33,11 +33,17 @@ typedef enum knurbs_property_kind {
 } knurbs_property_kind;
 
 /* Callbacks. Every callback is passed with a `param` and a `free_param` (which may be NULL). The library owns
- * `param` from the moment of the call, whether or not the call succeeds: it calls free_param(param) once, when the
- * callback is replaced or its properties are destroyed (at once, if the call fails). The handles passed to a
- * callback do not own a reference and are only valid during the call: take one with knurbs_ref to keep them. A
- * callback runs on whichever thread calls knurbs_property_click or knurbs_properties_notify_modified, with no lock
- * held, and must not let an exception (C++) or longjmp escape. */
+ * `param` from the moment of the call, whether or not the call succeeds, and calls free_param(param) once:
+ *  - at once, if the call fails or clears a callback (knurbs_properties_set_modified with NULL);
+ *  - for a modified callback, when it is replaced or cleared, or its properties are destroyed;
+ *  - for a button callback, when the button property is destroyed (a property you still hold keeps it alive, even
+ *    after its properties are released).
+ * If a call through the callback is in flight on another thread at that time, the callback stays alive until that
+ * call returns, and free_param then runs on that thread. free_param never runs under an internal lock of the
+ * library, so it may call into the library, but it should not assume which thread it runs on.
+ * The handles passed to a callback do not own a reference and are only valid during the call: take one with
+ * knurbs_ref to keep them. A callback runs on whichever thread calls knurbs_property_click or
+ * knurbs_properties_notify_modified, with no lock held, and must not let an exception (C++) or longjmp escape. */
 typedef bool (*knurbs_property_click_fn)(knurbs_properties_t *properties, knurbs_property_t *property, void *param);
 typedef bool (*knurbs_property_modified_fn)(knurbs_properties_t *properties, knurbs_property_t *property,
 					    knurbs_data_t *settings, void *param);
@@ -80,7 +86,8 @@ KNURBS_C_API knurbs_result knurbs_properties_find(knurbs_properties_t *propertie
 KNURBS_C_API knurbs_result knurbs_properties_list(knurbs_properties_t *properties, knurbs_property_t ***out_list,
 						  size_t *out_count);
 
-/* Sets the callback that knurbs_properties_notify_modified runs for this id. `callback` must not be NULL. */
+/* Sets the callback that knurbs_properties_notify_modified runs for this id, replacing an earlier one. A NULL
+ * `callback` clears it (and frees `param` at once). */
 KNURBS_C_API knurbs_result knurbs_properties_set_modified(knurbs_properties_t *properties, const char *id,
 							  knurbs_property_modified_fn callback, void *param,
 							  void (*free_param)(void *));
