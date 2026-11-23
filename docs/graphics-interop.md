@@ -116,6 +116,54 @@ there), and in-process code must not destroy them, may use the queue only with t
 must order its work with the renderer itself (`gs_flush()` plus its own semaphores, or better a `gs_timeline_t`).
 Code that may move to another process uses the exports above instead.
 
+## Texture encoders
+
+On the Vulkan renderer, GPU encoding (`obs-video-gpu-encode.c`) hands frames to encoders as OS handles, never as
+D3D11 share handles (Vulkan has none) or Vulkan objects. An encoder opts in with `OBS_ENCODER_CAP_SHARED_HANDLES`
+and finds the frame in `encoder_texture::shared` (`struct encoder_texture_shared`, `obs-encoder.h`):
+
+* `tex`: the NV12/P010 image (both planes, `GS_RENDER_TARGET`), exported once per image and identified by `tex_id`.
+  The encode conversion targets and the encoder frames are exportable textures on Vulkan; they swap as before, so an
+  image moves between frames and `tex_id` follows the image, not the frame.
+* `buf`: with `OBS_ENCODER_CAP_SHARED_BUFFER` also, a pitch-linear copy (`gs_sharedbuf_t`) identified by `buf_id`.
+  libobs records the copy right after the conversion, only while such an encoder is active.
+* `ready` / `ready_value`: one timeline for the pool, signalled by the render thread once the frame (and its copy)
+  is written. Read the frame only after it reached the value.
+* `release` / `release_value`: a timeline per encoder (created in `start_gpu_encode`). The encoder signals it to at
+  least `release_value` once it no longer reads the frame, in order (values only increase, so an encoder holding
+  frames out of order signals up to just below the oldest one it still holds).
+
+libobs keeps every handle open while the pool exists; encoders import them (imports borrow) and cache the imports by
+id. A frame is reused only when every encoder it went to has released it (`gs_timeline_get_value` on the render
+thread, no GPU or CPU wait). While encoders hold frames the pool grows instead, up to 80 frames, past which libobs
+repeats the previous frame as it does when every frame is queued. A slow encoder therefore never stalls the render
+queue, and one that stops or dies cannot hang it: `stop_gpu_encode` marks its holds as over. libobs hands a frame to
+an encoder more than once when the renderer lags, so an encoder must expect the same `tex_id`/`buf_id` while an
+earlier use of it is still in flight. Encoders without the cap get `shared == NULL` and must be done with the frame
+when `encode_texture2` returns, as before. Exported memory is always a dedicated allocation (CUDA needs to know:
+`CUDA_EXTERNAL_MEMORY_DEDICATED`).
+
+| Encoder | Path | Copies per frame | Sync |
+|---|---|---|---|
+| knurbs-nvenc | `buf` imported into CUDA, registered as `CUDADEVICEPTR` | 1 (libobs: image to buffer) | CUDA waits `ready` on its stream (and the encode thread waits for the stream); CUDA signals `release` once the frame's bitstream is locked |
+| AMF (obs-ffmpeg, **opt-in**: `OBS_AMF_VULKAN_TEXTURE=1`) | `tex` imported as a VkImage into the encoder's own VkDevice, wrapped with `CreateSurfaceFromVulkanNative` | 0 in OBS (1 with a raw output active, as on D3D11); AMF's own conversion as on D3D11 | host waits on `ready` (`vkWaitSemaphores`); host signals `release` from `OnSurfaceDataRelease` |
+
+NVENC uses the buffer because on Windows an NV12 image imported as a CUDA array reads back garbage (spike 3). Its
+CUDA device is the one whose UUID matches the renderer's adapter; on another GPU it reroutes to the non-texture
+encoder, as before. A repeated frame is one buffer in several bitstream slots, so its NVENC mapping is counted.
+
+AMF cannot create a Vulkan device itself (`InitVulkan(nullptr)` fails), so the encoder creates one on the
+renderer's adapter (by device UUID) with every queue of every family, the device extensions AMF asks for
+(`GetVulkanDeviceExtensions`), the external memory/semaphore extensions, every core feature, and the instance
+extensions AMF needs: the surface extensions for `VK_KHR_swapchain`, and the KHR extensions whose function names AMF
+looks up (`vkGetPhysicalDeviceProperties2KHR`, else `InitVulkan` fails). AMF submits to that device's queues from
+its own threads, so the encoder itself never submits to a queue there: it only uses host waits and signals, which
+keeps the rule that two threads never submit to the same `VkQueue`. With `OBS_VULKAN_VALIDATION=1` that device runs
+under the validation layer too and logs its message count when destroyed. The capability probe's results are in
+DXGI adapter order, so on Vulkan the adapter is looked up by LUID.
+
+`test/cmocka/test_vulkan_gpu_encode.cpp` runs both end to end (see Tests).
+
 ## Device loss
 
 `gs_register_loss_callbacks` works as on D3D11: when the device is lost (any `VK_ERROR_DEVICE_LOST`), the next safe
@@ -169,6 +217,16 @@ the rebuild); `test_vulkan_loss` uses it.
   (the validation layer agrees), and another process imports the same handle fine. Timelines import in-process
   without trouble. This doesn't affect the process-per-plugin model. In-process consumers on NVIDIA use CUDA or the
   device's own texture. The test asserts the failure, so a fixed driver shows up as a test failure.
+* **AMD: AMF's Vulkan encoder now and then encodes the wrong picture** (Adrenalin 26.11.2, AMF runtime 1.5,
+  Radeon 780M). Given libobs's images by `CreateSurfaceFromVulkanNative`, it encodes the picture of an earlier input
+  (5 to 30 frames back) instead of the one it was given: about one run in two shows 1 or 2 such frames in 120, more
+  after a stalled render. Ruled out: libobs reusing an image too early (it happens with every image fresh and never
+  reused), wrapper address reuse, AMF's binary versus timeline semaphore mode, the plane view formats (AMF creates
+  `R8_UINT`/`R8G8_UINT` views outside the image's format list; adding them changed nothing). The same scenes through
+  AMF's D3D11 path on the same GPU are clean, as is NVENC through the frame buffer. `AMFSurface::Duplicate` of such a
+  surface crashes, and AMF's device then reports command buffers freed and fences reset while in use. The Vulkan
+  path is therefore opt-in (`OBS_AMF_VULKAN_TEXTURE=1`); by default AMF on Vulkan reroutes to its non-texture
+  encoder. The AMF tests are registered but disabled.
 * **Keyed mutex timeouts in `vkQueueSubmit2` differ.** NVIDIA returns `VK_TIMEOUT` (a success code: the batch runs
   and signals). AMD returns `VK_SUCCESS` even though the acquire couldn't succeed. Hence the CPU-side timeout above.
 
@@ -183,3 +241,13 @@ layout, and a child process that receives the texture, NV12 texture and timeline
 pipe, checks them, writes and signals back. Pick the GPU with `VK_LOADER_DRIVERS_SELECT` (`*nv-vk64*`,
 `*amd-vulkan64*`). `test_vulkan_tracker` covers the queue-family acquire and release, and `test_vulkan_exports`
 checks that the null module exports every import.
+
+`test/cmocka/test_vulkan_gpu_encode.cpp` encodes through a real encoder module on the real video pipeline: a
+moving pattern carrying its frame number (top and bottom rows), a grey level and a bar derived from it, decoded back
+with libavcodec. Every decoded frame must be whole (both numbers agree), current (grey and bar match the number)
+and in order, the encoder must not have rerouted to its raw variant, and neither libobs's device nor the encoder's
+own Vulkan device may report a validation message. `stall=N` makes every N-th render sleep for three frame times
+(libobs then repeats frames), `overdraw=N` adds GPU load. NVENC runs H.264 NV12, HEVC P010, H.264 with lookahead
+(the pool grows) and H.264 with stalls on the NVIDIA adapter; the AMF tests (H.264, HEVC P010, stalls) are disabled
+(see Driver issues). A missing ready wait could not be caught at a size the validation layer runs in reasonable
+time: the GPU finishes a 640x352 frame before the encoder thread reads it.
