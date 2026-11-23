@@ -363,6 +363,14 @@ if(ENABLE_VULKAN)
       test_vulkan_video_compare
       PROPERTIES FIXTURES_REQUIRED "video_vulkan;video_d3d11" SKIP_REGULAR_EXPRESSION "SKIPPED"
     )
+  else()
+    # No D3D11 reference outside Windows and no golden file committed: only the render's analytic checks run. Say
+    # so in every ctest run instead of leaving the comparison out silently.
+    add_test(
+      NAME test_vulkan_video_compare
+      COMMAND "${CMAKE_COMMAND}" -E echo "SKIPPED: no D3D11 reference render on this platform"
+    )
+    set_tests_properties(test_vulkan_video_compare PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")
   endif()
 
   # Queue priority measurement only (not a test, not installed): the synthetic D3D11 foreground load. The OBS side
