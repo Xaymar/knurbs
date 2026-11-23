@@ -364,11 +364,16 @@ void properties::set_modified(std::string_view id,
 	if (callback) {
 		stored = std::make_shared<detail::modified_callback>(std::move(callback));
 	}
+	// The replaced callback is destroyed after the lock is released: its destructor may call back into us.
+	std::shared_ptr<detail::modified_callback> replaced;
 	std::lock_guard lock(i.mutex);
 	if (stored) {
-		i.modified.insert_or_assign(std::string(id), std::move(stored));
-	} else {
-		i.modified.erase(std::string(id));
+		std::shared_ptr<detail::modified_callback> &slot = i.modified[std::string(id)];
+		replaced = std::move(slot);
+		slot = std::move(stored);
+	} else if (auto it = i.modified.find(id); it != i.modified.end()) {
+		replaced = std::move(it->second);
+		i.modified.erase(it);
 	}
 }
 

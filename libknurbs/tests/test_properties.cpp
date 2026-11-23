@@ -149,6 +149,47 @@ static void test_button(void **)
 	assert_int_equal(clicks, 1);
 }
 
+namespace {
+// Calls back into the properties from its destructor, which deadlocks if that runs under the properties' lock.
+struct find_on_destroy {
+	properties *props;
+	int *destroyed;
+	find_on_destroy(properties *p, int *d) : props(p), destroyed(d) {}
+	find_on_destroy(find_on_destroy &&other) noexcept : props(other.props), destroyed(other.destroyed)
+	{
+		other.props = nullptr;
+	}
+	~find_on_destroy()
+	{
+		if (props) {
+			props->find("gain");
+			++*destroyed;
+		}
+	}
+	bool operator()(properties &, property &, data &) const { return true; }
+};
+} // namespace
+
+static void test_replaced_callback_destroyed_outside_lock(void **)
+{
+	ref<properties> props = properties::create();
+	props->add_int("gain", "Gain", 0, 1, 0.1);
+	int destroyed = 0;
+
+	props->set_modified("gain", find_on_destroy(props.get(), &destroyed));
+	assert_int_equal(destroyed, 0);
+
+	// Replacing destroys the old callback
+	props->set_modified("gain", find_on_destroy(props.get(), &destroyed));
+	assert_int_equal(destroyed, 1);
+
+	// Clearing destroys it too
+	props->set_modified("gain", nullptr);
+	assert_int_equal(destroyed, 2);
+	ref<data> settings = data::create();
+	assert_false(props->notify_modified("gain", *settings));
+}
+
 int main()
 {
 	const struct CMUnitTest tests[] = {
@@ -160,6 +201,7 @@ int main()
 		cmocka_unit_test(test_modified_callback),
 		cmocka_unit_test(test_callback_releases_properties),
 		cmocka_unit_test(test_button),
+		cmocka_unit_test(test_replaced_callback_destroyed_outside_lock),
 	};
 	return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
