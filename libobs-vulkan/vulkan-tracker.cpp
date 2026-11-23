@@ -1,10 +1,10 @@
 #include "vulkan-tracker.hpp"
 
 // shortcut: omits acceleration-structure and video write bits, upgrade when those are used.
-static constexpr VkAccessFlags2 write_bits =
-	VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-	VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_HOST_WRITE_BIT |
-	VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+static constexpr VkAccessFlags2 write_bits = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+					     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+					     VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_HOST_WRITE_BIT |
+					     VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
 
 static bool is_write(const vk_access &a)
 {
@@ -79,7 +79,7 @@ void vk_tracker::use_image(VkImage image, uint32_t family, const vk_access &need
 		b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
 		b.oldLayout = src.old_layout;
 		b.newLayout = needed.layout;
-		b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+		b.srcQueueFamilyIndex = s.owner;
 		b.dstQueueFamilyIndex = family;
 		b.image = image;
 		b.subresourceRange = {s.aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
@@ -118,7 +118,7 @@ void vk_tracker::use_buffer(VkBuffer buffer, uint32_t family, const vk_access &n
 			b.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
 			b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 			b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-			b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+			b.srcQueueFamilyIndex = s.owner;
 			b.dstQueueFamilyIndex = family;
 			b.buffer = buffer;
 			b.size = VK_WHOLE_SIZE;
@@ -127,8 +127,9 @@ void vk_tracker::use_buffer(VkBuffer buffer, uint32_t family, const vk_access &n
 		}
 	}
 	bool barrier = step(buffers_[key(buffer)], needed, false, src);
-	if (first || !barrier) // first use is not a hazard
+	if (first || !barrier) { // first use is not a hazard
 		return;
+	}
 
 	VkBufferMemoryBarrier2 b = {};
 	b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -166,19 +167,21 @@ void vk_tracker::forget(VkBuffer buffer)
 	erase_key(acquired_buffers_, key(buffer));
 }
 
-void vk_tracker::set_external(VkImage image, VkImageAspectFlags aspect, VkImageLayout layout)
+void vk_tracker::set_external(VkImage image, VkImageAspectFlags aspect, VkImageLayout layout, uint32_t owner)
 {
 	state s;
 	s.external = true;
 	s.aspect = aspect;
 	s.layout = layout;
+	s.owner = owner;
 	images_[key(image)] = s;
 }
 
-void vk_tracker::set_external(VkBuffer buffer)
+void vk_tracker::set_external(VkBuffer buffer, uint32_t owner)
 {
 	state s;
 	s.external = true;
+	s.owner = owner;
 	buffers_[key(buffer)] = s;
 }
 
@@ -193,14 +196,16 @@ void vk_tracker::release_external(uint32_t family, vk_barriers &out)
 		b.oldLayout = s.layout;
 		b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
 		b.srcQueueFamilyIndex = family;
-		b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+		b.dstQueueFamilyIndex = s.owner;
 		b.image = (VkImage)k;
 		b.subresourceRange = {s.aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
 		out.images.push_back(b);
 		const VkImageAspectFlags aspect = s.aspect;
+		const uint32_t owner = s.owner;
 		s = state{};
 		s.external = true;
 		s.aspect = aspect;
+		s.owner = owner;
 		s.layout = VK_IMAGE_LAYOUT_GENERAL;
 	}
 	for (uint64_t k : acquired_buffers_) {
@@ -210,12 +215,14 @@ void vk_tracker::release_external(uint32_t family, vk_barriers &out)
 		b.srcAccessMask = s.write_access;
 		b.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
 		b.srcQueueFamilyIndex = family;
-		b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+		b.dstQueueFamilyIndex = s.owner;
 		b.buffer = (VkBuffer)k;
 		b.size = VK_WHOLE_SIZE;
 		out.buffers.push_back(b);
+		const uint32_t owner = s.owner;
 		s = state{};
 		s.external = true;
+		s.owner = owner;
 	}
 	acquired_images_.clear();
 	acquired_buffers_.clear();
@@ -230,9 +237,11 @@ void vk_tracker::reset()
 				continue;
 			}
 			const VkImageAspectFlags aspect = it->second.aspect;
+			const uint32_t owner = it->second.owner;
 			it->second = state{};
 			it->second.external = true;
 			it->second.aspect = aspect;
+			it->second.owner = owner;
 			it->second.layout = VK_IMAGE_LAYOUT_GENERAL;
 			++it;
 		}
