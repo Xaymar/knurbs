@@ -16,8 +16,8 @@ namespace knurbs {
 
 namespace detail {
 
-using click_callback = std::move_only_function<bool(properties &, property &)>;
-using modified_callback = std::move_only_function<bool(properties &, property &, data &)>;
+using click_callback = knurbs::move_only_function<bool(properties &, property &)>;
+using modified_callback = knurbs::move_only_function<bool(properties &, property &, data &)>;
 
 // Locking: each operation holds at most one object's lock at a time, and callbacks run with no lock held.
 // The constant parts of a property (id, kind, label, range, group, owner) are written before it is published.
@@ -318,7 +318,7 @@ ref<property> properties::add_color(std::string_view id, std::string label)
 }
 
 ref<property> properties::add_button(std::string_view id, std::string label,
-				     std::move_only_function<bool(properties &, property &)> on_click)
+				     knurbs::move_only_function<bool(properties &, property &)> on_click)
 {
 	if (!on_click) {
 		throw error::invalid_argument(std::format("properties: button {} has no callback", id));
@@ -356,7 +356,7 @@ std::vector<ref<property>> properties::list() const
 }
 
 void properties::set_modified(std::string_view id,
-			      std::move_only_function<bool(properties &, property &, data &)> callback)
+			      knurbs::move_only_function<bool(properties &, property &, data &)> callback)
 {
 	naming::check_key(id);
 	properties_impl &i = impl(*this);

@@ -99,7 +99,7 @@ namespace detail {
 class task_queue_impl final : public task_queue {
 	struct entry {
 		std::uint64_t seq;
-		std::move_only_function<void()> fn;
+		knurbs::move_only_function<void()> fn;
 	};
 
 	static constexpr std::uint64_t none = std::numeric_limits<std::uint64_t>::max();
@@ -135,7 +135,7 @@ public:
 
 	bool on_thread() const noexcept { return std::this_thread::get_id() == thread_id_; }
 
-	void post(std::move_only_function<void()> fn)
+	void post(knurbs::move_only_function<void()> fn)
 	{
 		if (!fn) {
 			throw error::invalid_argument(std::format("{}: posted an empty task", name_));
@@ -201,7 +201,7 @@ private:
 	// Pops and runs the front task with `lock` released. `lock` is held again on return.
 	void run_front(std::unique_lock<std::mutex> &lock)
 	{
-		std::move_only_function<void()> fn = std::move(tasks_.front().fn);
+		knurbs::move_only_function<void()> fn = std::move(tasks_.front().fn);
 		tasks_.pop_front();
 		lock.unlock();
 		try {
@@ -262,7 +262,7 @@ ref<task_queue> task_queue::create(std::string_view name, ref<log::logger> logge
 
 // task_queue is only ever constructed as a task_queue_impl (its constructor is private), so these casts are
 // always to the dynamic type.
-void task_queue::post(std::move_only_function<void()> task)
+void task_queue::post(knurbs::move_only_function<void()> task)
 {
 	static_cast<detail::task_queue_impl *>(this)->post(std::move(task));
 }

@@ -2,11 +2,11 @@
 
 #include <cstdint>
 #include <format>
-#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "knurbs/function.hpp"
 #include "knurbs/export.hpp"
 #include "knurbs/object.hpp"
 #include "knurbs/ref.hpp"
@@ -16,7 +16,7 @@ namespace knurbs::log {
 enum class level : std::uint8_t { debug, info, warning, error };
 
 // Receives every message written to the logger it was added to. Called without any logger lock held.
-using sink = std::move_only_function<void(level, std::string_view) noexcept>;
+using sink = knurbs::move_only_function<void(level, std::string_view) noexcept>;
 
 namespace detail {
 class logger_impl;

@@ -2,11 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "knurbs/function.hpp"
 #include "knurbs/data.hpp"
 #include "knurbs/export.hpp"
 #include "knurbs/object.hpp"
@@ -97,7 +97,7 @@ public:
 	ref<property> add_list(std::string_view id, std::string label);
 	ref<property> add_color(std::string_view id, std::string label);
 	ref<property> add_button(std::string_view id, std::string label,
-				 std::move_only_function<bool(properties &, property &)> on_click);
+				 knurbs::move_only_function<bool(properties &, property &)> on_click);
 	ref<property> add_group(std::string_view id, std::string label, ref<properties> group);
 	ref<property> add_notice(std::string_view id, std::string text);
 
@@ -108,7 +108,7 @@ public:
 
 	// Sets the callback that notify_modified runs for this id, replacing an earlier one. The id need not exist yet.
 	void set_modified(std::string_view id,
-			  std::move_only_function<bool(properties &, property &, data &)> callback);
+			  knurbs::move_only_function<bool(properties &, property &, data &)> callback);
 	// Runs the callback set for `id` and returns its result; false if there is no callback or no such property.
 	bool notify_modified(std::string_view id, data &settings);
 };

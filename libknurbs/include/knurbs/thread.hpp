@@ -1,8 +1,8 @@
 #pragma once
 
-#include <functional>
 #include <string_view>
 
+#include "knurbs/function.hpp"
 #include "knurbs/export.hpp"
 #include "knurbs/log.hpp"
 #include "knurbs/object.hpp"
@@ -32,7 +32,7 @@ public:
 
 	// Queues `task` to run after everything posted before it. Throws error::core_gone once the queue is
 	// stopping, and error::invalid_argument for an empty `task`.
-	void post(std::move_only_function<void()> task);
+	void post(knurbs::move_only_function<void()> task);
 
 	// Blocks until everything posted before the call has run. On the queue's own thread it runs those tasks
 	// inline instead.
