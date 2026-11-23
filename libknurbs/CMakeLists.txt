@@ -21,7 +21,7 @@ add_library(knurbs::knurbs ALIAS libknurbs)
 
 target_sources(
   libknurbs
-  PRIVATE source/error.cpp source/log.cpp source/object.cpp source/thread.cpp source/version.cpp
+  PRIVATE source/error.cpp source/log.cpp source/object.cpp source/platform.cpp source/thread.cpp source/version.cpp
 )
 
 target_include_directories(
