@@ -40,7 +40,10 @@ function(knurbs_add_test name)
   endif()
   target_compile_definitions(${name} PRIVATE KNURBS_CHECK_KEYS)
   # Keep char8_t on when OBS turns it off (see libknurbs/CMakeLists.txt)
-  target_compile_options(${name} PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fchar8_t>)
+  target_compile_options(
+    ${name}
+    PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fchar8_t> $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:char8_t>
+  )
   target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(${name} PRIVATE knurbs::knurbs cmocka::cmocka)
   set_target_properties(${name} PROPERTIES FOLDER "Tests and Examples")
@@ -85,7 +88,10 @@ function(knurbs_add_fake_module name source)
     target_compile_options(${name} PRIVATE -Wall -Wextra -pedantic)
   endif()
   # Keep char8_t on when OBS turns it off (see libknurbs/CMakeLists.txt)
-  target_compile_options(${name} PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fchar8_t>)
+  target_compile_options(
+    ${name}
+    PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fchar8_t> $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:char8_t>
+  )
   target_link_libraries(${name} PRIVATE knurbs::knurbs)
   # The generator expression keeps multi-config generators from appending a per-configuration directory.
   set_target_properties(

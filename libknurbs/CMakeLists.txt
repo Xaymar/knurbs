@@ -81,8 +81,12 @@ else()
   target_compile_options(libknurbs PRIVATE -Wall -Wextra)
 endif()
 
-# OBS adds -fno-char8_t for Clang (directory-wide on macOS); libknurbs needs char8_t, and target options come last.
-target_compile_options(libknurbs PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fchar8_t>)
+# OBS adds -fno-char8_t for Clang (directory-wide on macOS) and /Zc:char8_t- for MSVC from C++20 on; libknurbs needs
+# char8_t, and target options come last.
+target_compile_options(
+  libknurbs
+  PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fchar8_t> $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:char8_t>
+)
 
 set_target_properties(
   libknurbs
