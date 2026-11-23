@@ -395,7 +395,7 @@ knurbs_properties_t *one_property(void *, const knurbs_data_t *)
 	return props;
 }
 
-struct knurbs_type_info type_info(const char *id, int *freed)
+struct knurbs_type_info make_type_info(const char *id, int *freed)
 {
 	return {sizeof(struct knurbs_type_info), id, KNURBS_TYPE_FILTER, 1, nullptr, nullptr, freed, count_free};
 }
@@ -418,33 +418,33 @@ static void test_c_registry_add_checks_info(void **)
 
 	// Without a readable struct the library cannot take ownership, so free_param does not run.
 	assert_int_equal(knurbs_registry_add(m, nullptr), KNURBS_ERROR_INVALID_ARGUMENT);
-	auto info = type_info("com.example.c.checked", &freed);
+	auto info = make_type_info("com.example.c.checked", &freed);
 	info.size = offsetof(struct knurbs_type_info, free_param);
 	assert_int_equal(knurbs_registry_add(m, &info), KNURBS_ERROR_INVALID_ARGUMENT);
 	assert_int_equal(freed, 0);
 
 	// Every other failure frees the param at once.
-	info = type_info(nullptr, &freed);
+	info = make_type_info(nullptr, &freed);
 	assert_int_equal(knurbs_registry_add(m, &info), KNURBS_ERROR_INVALID_ARGUMENT);
 	assert_int_equal(freed, 1);
-	info = type_info("Not A Type ID", &freed);
+	info = make_type_info("Not A Type ID", &freed);
 	assert_int_equal(knurbs_registry_add(m, &info), KNURBS_ERROR_INVALID_ARGUMENT);
 	assert_int_equal(freed, 2);
-	info = type_info("com.example.c.checked", &freed);
+	info = make_type_info("com.example.c.checked", &freed);
 	info.kind = 99;
 	assert_int_equal(knurbs_registry_add(m, &info), KNURBS_ERROR_INVALID_ARGUMENT);
 	assert_int_equal(freed, 3);
-	info = type_info("com.example.c.checked", &freed);
+	info = make_type_info("com.example.c.checked", &freed);
 	assert_int_equal(knurbs_registry_add(nullptr, &info), KNURBS_ERROR_INVALID_ARGUMENT);
 	assert_int_equal(freed, 4);
-	info = type_info("com.example.fake.ok", &freed);
+	info = make_type_info("com.example.fake.ok", &freed);
 	assert_int_equal(knurbs_registry_add(m, &info), KNURBS_ERROR_ALREADY_EXISTS);
 	assert_int_equal(freed, 5);
 	assert_true(std::string_view(knurbs_last_error()).find("com.example.fake.ok") != std::string_view::npos);
 
 	// A larger struct from a later version is fine; the id is copied.
 	char id[] = "com.example.c.checked";
-	type_info_v2 v2{type_info(id, &freed), 0};
+	type_info_v2 v2{make_type_info(id, &freed), 0};
 	v2.info.size = sizeof(v2);
 	v2.info.defaults = set_level;
 	v2.info.properties = no_properties;
@@ -511,7 +511,7 @@ static void test_c_registry_optional_callbacks(void **)
 	// The properties callback returns a reference that the library adopts (a leak or a double release shows up
 	// under the sanitizers).
 	int freed = 0;
-	auto info = type_info("com.example.c.props", &freed);
+	auto info = make_type_info("com.example.c.props", &freed);
 	info.properties = one_property;
 	assert_int_equal(knurbs_registry_add(m, &info), KNURBS_OK);
 	auto p = c->registry().find("com.example.c.props")->properties(*settings);
