@@ -42,6 +42,9 @@ os_process_pipe_t *os_process_pipe_create_internal(const char *bin, char **argv,
 	if (!bin || !argv || !type) {
 		return NULL;
 	}
+	if (*type != 'r' && *type != 'w') {
+		return NULL;
+	}
 
 	process_pipe.read_pipe = *type == 'r';
 
