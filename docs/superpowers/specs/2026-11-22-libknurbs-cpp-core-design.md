@@ -98,7 +98,7 @@ These are not built by this project, but the core must not make them hard:
   minimum versions in `libknurbs/README.md`: current MSVC, GCC 14 (the Flatpak
   SDK's), and the AppleClang release that first ships the features we need.
   Verify AppleClang's libc++ before relying on any of these:
-  `std::expected`, `std::move_only_function`, `std::print`, `std::flat_map`,
+  `std::move_only_function`, `std::print`, `std::flat_map`,
   `std::jthread`/`std::stop_token`, and deducing `this`.
 - **One standard library per platform**: MSVC STL on Windows, libstdc++ on
   Linux (Clang on Linux must also use libstdc++, never libc++), and libc++ on
@@ -186,7 +186,7 @@ class KNURBS_API source : public object {
 public:
 	std::string_view id() const noexcept;
 	std::string name() const;
-	expected<void> set_name(std::string_view name);
+	void set_name(std::string_view name);   // throws knurbs::invalid_argument
 	ref<data> settings() const;
 	// ...
 protected:
@@ -264,7 +264,7 @@ class:
   last release of the core) stops the threads in a defined order, releases
   everything the core itself holds, and marks every object it created as
   detached. A reference that outlives the core stays valid memory until it is
-  released, but every call on it returns `error::core_gone`, and weak refs to
+  released, but every call on it throws `knurbs::core_gone`, and weak refs to
   it expire. Leftover references are logged in debug builds. Objects don't hold
   a strong reference to their core, so a forgotten reference can't keep a
   whole core alive. My call.
@@ -274,17 +274,35 @@ class:
 
 ### Errors
 
-- Fallible public C++ calls return `knurbs::expected<T>`, which is
-  `std::expected<T, knurbs::error>`. `knurbs::error` holds a code from a public
-  enum plus a message.
-- The C API returns a `knurbs_result` code. Functions that return objects
-  return NULL on failure, and `knurbs_last_error()` (thread-local) gives the
-  message.
-- Exceptions are allowed inside `src/`, but are caught at every public
-  boundary. Every call into a plugin is wrapped, so a plugin that throws
-  disables itself (it is logged and its source turns into an error state)
-  instead of taking the core down. My call: Xaymar may prefer exceptions
-  through the C++ API instead.
+- **The C++ API reports errors with exceptions** (Xaymar, 2026-11-22). The
+  reasons: the success path costs nothing (the zero-cost model that compilers
+  and CPUs have been tuned for), and constructors can fail properly, so a
+  constructed object is always valid. All exceptions thrown by libknurbs
+  derive from `knurbs::error`, which derives from `std::runtime_error` and
+  carries a code from a public `knurbs::errc` enum. Subclasses (for example
+  `knurbs::not_found`, `knurbs::invalid_argument`, `knurbs::core_gone`,
+  `knurbs::gpu_lost`) exist where callers need to catch them separately.
+  Exceptions cross the C++ API boundary in both directions, which is safe
+  because every platform has a single toolchain.
+- Exceptions are for errors, not for control flow. Lookups that can
+  legitimately find nothing (`registry.find(id)`, `scene.find_item(name)`)
+  return an empty `ref<T>` or a `std::optional`. Each public function says in
+  its header comment what it throws.
+- Functions that must never throw are marked `noexcept`: destructors,
+  `release`, getters of plain values, and everything on the render and audio
+  threads' hot paths that can't fail.
+- **The C API catches everything.** Every C function wraps its body. It
+  returns a `knurbs_result` code (functions that return objects return NULL on
+  failure), and `knurbs_last_error()` (thread-local) gives the message. No
+  exception ever leaves a C function.
+- **Calls into plugins are wrapped.** The dispatch helper catches whatever a
+  plugin throws. The plugin's instance is then disabled and logged (a source
+  shows an error state, an output stops with an error), and the core keeps
+  running. Errors the core throws to a plugin that calls it are ordinary
+  exceptions the plugin can catch.
+- Threads owned by the core catch at their top level, so an exception there is
+  logged and stops only the work it belongs to, never `std::terminate`s the
+  process.
 
 ### Threads and locking
 
@@ -305,7 +323,7 @@ class:
 
 Each layer has its own tests and is usable before the next one starts.
 
-1. **Foundation:** `object`/`ref`/`weak`, `error`/`expected`, logging (with a
+1. **Foundation:** `object`/`ref`/`weak`, the `error` exception hierarchy, logging (with a
    sink that plugins and the frontend can hook), UTF-8 strings,
    `std::filesystem` paths (UTF-8 conversion on Windows), platform helpers
    (time, CPU, power, high-resolution clock), threads and queues, the profiler.
@@ -429,6 +447,11 @@ builder keeps a list of what was checked.
 - The C++ API is exported, with internals hidden, and the frontend uses it
   directly (2026-11-22).
 - C++23 (2026-11-22).
+- Exceptions in the C++ API, not `std::expected` (2026-11-22). The C API
+  catches them and returns result codes.
+- Importing old OBS or libobs-era user data (scene collections, profiles,
+  settings) is frontend work: a later one-time importer. The libknurbs data
+  layer has no legacy key or ID migration path (2026-11-22).
 - The C++ ABI stays compatible across a major version, the way Qt 6 does
   (2026-11-22).
 - The C++ API is for third-party plugins too. Compatibility between compilers
@@ -444,11 +467,10 @@ builder keeps a list of what was checked.
 
 - The derived-implementation pattern instead of pimpl for hiding internals.
 - Intrusive `ref<T>`/`weak<T>` instead of `std::shared_ptr`.
-- `std::expected` in the C++ API, exceptions caught at every boundary.
 - No `obs_*` compatibility shim in libknurbs at all.
 - cmocka for the new tests as well.
 - Inline refcount in `object` (the only public data member).
-- Shutdown with live references: detached objects, `error::core_gone`.
+- Shutdown with live references: detached objects that throw `knurbs::core_gone`.
 - Per-instance plugin objects that are themselves `knurbs::object`s.
 - Every plugin interface proxyable for datapath; no raw pointers in signatures.
 - One core clock shared by all canvases and audio.
