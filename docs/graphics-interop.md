@@ -207,7 +207,7 @@ when `encode_texture2` returns, as before. Exported memory is always a dedicated
 | Encoder | Path | Copies per frame | Sync |
 |---|---|---|---|
 | knurbs-nvenc | `buf` imported into CUDA, registered as `CUDADEVICEPTR` | 1 (libobs: image to buffer) | CUDA waits `ready` on its stream (and the encode thread waits for the stream); CUDA signals `release` once the frame's bitstream is locked |
-| AMF (obs-ffmpeg; `OBS_AMF_VULKAN_TEXTURE=0` forces the non-texture encoder) | `tex` imported as a VkImage into the encoder's own VkDevice and wrapped **once per image** with `CreateSurfaceFromVulkanNative`; that `AMFSurface` is resubmitted for the image's lifetime (a repeated frame still held by AMF gets a second one) | 0 in OBS (1 with a raw output active, as on D3D11); AMF's own conversion as on D3D11 | host waits on `ready` (`vkWaitSemaphores`); host signals `release` once AMF holds no reference to the frame's surface any more (polled on each encode call: `OnSurfaceDataRelease` does not fire while the encoder keeps its own reference) |
+| AMF (knurbs-amf; `OBS_AMF_VULKAN_TEXTURE=0` forces the non-texture encoder) | `tex` imported as a VkImage into the encoder's own VkDevice and wrapped **once per image** with `CreateSurfaceFromVulkanNative`; that `AMFSurface` is resubmitted for the image's lifetime (a repeated frame still held by AMF gets a second one) | 0 in OBS (1 with a raw output active, as on D3D11); AMF's own conversion as on D3D11 | host waits on `ready` (`vkWaitSemaphores`); host signals `release` once AMF holds no reference to the frame's surface any more (polled on each encode call: `OnSurfaceDataRelease` does not fire while the encoder keeps its own reference) |
 
 NVENC uses the buffer because on Windows an NV12 image imported as a CUDA array reads back garbage (spike 3). Its
 CUDA device is the one whose UUID matches the renderer's adapter; on another GPU it reroutes to the non-texture
@@ -284,7 +284,7 @@ the rebuild); `test_vulkan_loss` uses it.
   picture of an earlier input (2 to 100+ frames back), complete and valid. Synchronisation, rate-control frame
   skipping (off in all of this), the plane view formats, AMF's semaphore mode and image reuse make no difference;
   `repro/amf-vulkan-stale-frame` shows it without OBS. The encoder therefore wraps each libobs image once and
-  resubmits that surface for as long as the image lives (`texture-amf-vulkan.hpp`), so AMF imports each image once
+  resubmits that surface for as long as the image lives (`plugins/knurbs-amf/amf-encoder-vulkan.hpp`), so AMF imports each image once
   and nothing in its cache is recycled. The path is on by default; `OBS_AMF_VULKAN_TEXTURE=0` forces the non-texture
   encoder. AMF also creates `R8_UINT`/`R8G8_UINT` (`R16`/`R16G16` for P010) views of both planes, so those are in
   the format list of libobs's exportable NV12/P010 images and of the encoder's import. `AMFSurface::Duplicate` of

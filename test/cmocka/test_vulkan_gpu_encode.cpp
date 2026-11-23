@@ -1,5 +1,5 @@
 // GPU (texture) encoding on the Vulkan renderer, end to end: the real OBS video pipeline renders a moving pattern
-// that carries its frame number, a real texture encoder (knurbs-nvenc or obs-ffmpeg's AMF) encodes it from the
+// that carries its frame number, a real texture encoder (knurbs-nvenc or knurbs-amf) encodes it from the
 // shared frames (docs/graphics-interop.md, "Texture encoders"), and libavcodec decodes the packets back.
 //
 //   test_vulkan_gpu_encode <vulkan module> <encoder module> <encoder id> nv12|p010 [key=value ...]
@@ -65,7 +65,7 @@ static void log_handler(int level, const char *format, va_list args, void *)
 	if (strstr(line, "rerouted to")) {
 		rerouted = true;
 	}
-	// obs-ffmpeg's AMF device has its own validation (texture-amf-vulkan.cpp) and reports its count at the end.
+	// knurbs-amf's AMF device has its own validation (amf-encoder-vulkan.cpp) and reports its count at the end.
 	if (strstr(line, "validation messages on the AMF device")) {
 		encoder_validation_failed = true;
 	}
@@ -433,7 +433,7 @@ static void test_encode(void **)
 	print_message("renderer adapter: vendor %04x device %04x\n", id.vendor_id, id.device_id);
 
 	// libobs loads modules with a search path that leaves out PATH; outside an install tree the module's own
-	// dependencies (FFmpeg for obs-ffmpeg) are only found there, so load it the usual way first.
+	// dependencies are only found there, so load it the usual way first.
 	HMODULE preloaded = LoadLibraryA(module);
 	obs_module_t *mod = nullptr;
 	if (obs_open_module(&mod, module, nullptr) != MODULE_SUCCESS || !obs_init_module(mod)) {

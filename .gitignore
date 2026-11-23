@@ -8,6 +8,8 @@
 !/deps
 !/docs
 !/frontend
+!/knurbs-*
+!/libknurbs
 !/libobs*
 !/plugins
 !/shared
