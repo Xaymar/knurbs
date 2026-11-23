@@ -305,7 +305,7 @@ jobs:
       - name: Build Unit Tests 🧱
         run: |
           : Build Unit Tests 🧱
-          /usr/bin/cmake --build build_ubuntu --target obs-unit-tests --parallel
+          /usr/bin/cmake --build build_ubuntu --target obs-unit-tests knurbs-tests --parallel
 
       - name: Run Unit Tests 🧪
         run: |
@@ -527,7 +527,7 @@ jobs:
       - name: Build Unit Tests 🧱
         run: |
           # Build Unit Tests 🧱
-          cmake --build --preset windows-x64 --config RelWithDebInfo --target obs-unit-tests --parallel '--' '/consoleLoggerParameters:Summary' '/noLogo'
+          cmake --build --preset windows-x64 --config RelWithDebInfo --target obs-unit-tests knurbs-tests --parallel '--' '/consoleLoggerParameters:Summary' '/noLogo'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run Unit Tests 🧪

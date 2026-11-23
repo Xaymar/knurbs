@@ -1,0 +1,46 @@
+# Unit tests for libknurbs. Included from libknurbs/CMakeLists.txt.
+
+if(NOT TARGET cmocka::cmocka)
+  find_package(CMocka CONFIG QUIET)
+  if(NOT TARGET cmocka::cmocka)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(CMOCKA REQUIRED IMPORTED_TARGET cmocka)
+    add_library(cmocka::cmocka INTERFACE IMPORTED)
+    target_link_libraries(cmocka::cmocka INTERFACE PkgConfig::CMOCKA)
+  endif()
+endif()
+
+# knurbs.dll and the dependency runtime libraries are not next to the test executables on Windows
+set(_knurbs_runtime_env "")
+if(WIN32)
+  list(APPEND _knurbs_runtime_env "PATH=path_list_prepend:$<TARGET_FILE_DIR:libknurbs>")
+  foreach(prefix IN LISTS CMAKE_PREFIX_PATH)
+    if(EXISTS "${prefix}/bin")
+      list(APPEND _knurbs_runtime_env "PATH=path_list_prepend:${prefix}/bin")
+    endif()
+  endforeach()
+endif()
+
+add_custom_target(knurbs-tests)
+
+# knurbs_add_test(<name> [C]): tests/<name>.cpp, or tests/c/<name>.c (C11) with C, linked with libknurbs and cmocka
+function(knurbs_add_test name)
+  if("C" IN_LIST ARGN)
+    add_executable(${name} c/${name}.c)
+    set_target_properties(${name} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  else()
+    add_executable(${name} ${name}.cpp)
+  endif()
+  target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(${name} PRIVATE knurbs::knurbs cmocka::cmocka)
+  set_target_properties(${name} PROPERTIES FOLDER "Tests and Examples")
+  set(work_dir "${CMAKE_CURRENT_BINARY_DIR}/work/${name}")
+  file(MAKE_DIRECTORY "${work_dir}")
+  add_test(NAME ${name} COMMAND ${name} WORKING_DIRECTORY "${work_dir}")
+  if(_knurbs_runtime_env)
+    set_tests_properties(${name} PROPERTIES ENVIRONMENT_MODIFICATION "${_knurbs_runtime_env}")
+  endif()
+  add_dependencies(knurbs-tests ${name})
+endfunction()
+
+knurbs_add_test(test_version)
