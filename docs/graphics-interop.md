@@ -118,7 +118,7 @@ Code that may move to another process uses the exports above instead.
 
 ## Windows capture (win-capture)
 
-Game capture and window capture run on the Vulkan renderer as on D3D11. The hook side (graphics-hook, inject-helper,
+Game capture, window capture and display capture run on the Vulkan renderer as on D3D11. The hook side (graphics-hook, inject-helper,
 `graphics-hook-info.h`, the named objects and the shmem/shtex layouts) is unchanged, so OBS Studio's signed hook works
 with Knurbs; `test_vulkan_win_capture` runs against both (below).
 
@@ -128,12 +128,49 @@ with Knurbs; `test_vulkan_win_capture` runs against both (below).
 | Game capture, memory (compatibility mode, or no shared textures) | unchanged CPU upload | 1 CPU upload, as on D3D11 | the hook's mutexes, unchanged |
 | Window capture, Windows Graphics Capture | WGC delivers frames to a private D3D11 device on the renderer's adapter (by LUID); each frame is copied into one of three NT-handle, keyed-mutex textures of the frame's format (BGRA, or RGBA16F for HDR), imported once with `gs_texture_open_nt_shared` | 1 GPU copy (D3D11), as on D3D11 | keyed mutex, key 0 both ways: Vulkan holds the slot it draws until a newer frame is drawn; frames go to the other slots |
 | Window capture, BitBlt | the compatibility path (BitBlt into a DIB, then upload): Vulkan has no GDI-compatible textures | 1 CPU upload (D3D11 BitBlts into the texture's DC instead) | none |
+| Display capture, DXGI duplication, monitor on the renderer's adapter | `dxgi-duplicator.cpp` (win-capture) duplicates the output with a private D3D11 device on that adapter and copies each new desktop image into one of three keyed-mutex NT-handle textures (BGRA, or RGBA16F through `DuplicateOutput1` for HDR), imported once | 1 GPU copy (D3D11), as on D3D11; none for a pointer-only update | keyed mutex, as for WGC |
+| Display capture, DXGI duplication, monitor on another adapter | the private D3D11 device is on the monitor's adapter; each new image is copied into a staging texture, mapped one tick later and uploaded | 1 GPU copy + 1 readback + 1 CPU upload (D3D11: no duplication at all, "Automatic" picks WGC) | none (the map waits for the copy) |
+| Display capture, Windows Graphics Capture | libobs-winrt's monitor capture, through the same private D3D11 device and slots as window capture | 1 GPU copy (D3D11), as on D3D11 | keyed mutex |
 
-libobs-winrt (also used by display capture's WGC mode, which is still D3D11-only) keeps the private D3D11 device
+The private D3D11 device and the keyed-mutex texture set are `shared/d3d11-vulkan-bridge`, used by libobs-winrt and
+by the duplicator. libobs-winrt (window capture and display capture's WGC mode) keeps its private D3D11 device
 while any capture uses it. WGC frames arrive on the graphics thread (its dispatcher queue), so the slot state needs no
 lock. On a Vulkan device loss the D3D11 device and the capture session keep running; only the imported textures are
 replaced, with the next frame. If the D3D11 device is lost too, or the adapter changed, the session is recreated.
 `OBS_WINRT_TEST_HDR=1` makes WGC capture RGBA16F frames as on an HDR monitor (test hook).
+
+**Display capture (DXGI duplication).** libobs's `gs_duplicator` is part of libobs-d3d11 and duplicates with the
+renderer's own D3D11 device, so on D3D11 display capture still uses it, unchanged. On Vulkan, win-capture's
+`dxgi-duplicator.cpp` does the same with only OS handles crossing into libobs:
+
+* The D3D11 device is created on the adapter that drives the monitor (found by enumerating every adapter's outputs),
+  not on the renderer's. When that is the renderer's adapter (LUID match), frames go through the keyed-mutex slots;
+  otherwise a D3D11 texture can't be imported into the renderer's Vulkan device, so they go through the CPU (table
+  above). "Automatic" picks WGC when the monitor is not on the renderer's adapter or on a laptop on battery with
+  several adapters, as on D3D11; WGC does the cross-adapter copy inside the OS.
+* `IDXGIOutput5::DuplicateOutput1` with R16G16B16A16_FLOAT and B8G8R8A8 as libobs-d3d11 does (HDR monitors give
+  scRGB, `GS_CS_709_SCRGB`, with the SDR white level from DisplayConfig). It needs a per-monitor-v2 DPI aware process
+  (OBS's manifest); where it reports `DXGI_ERROR_UNSUPPORTED` the duplicator falls back to `DuplicateOutput` (SDR),
+  where libobs-d3d11 fails.
+* Every capture of a monitor shares one duplication, which takes at most one frame per video frame (D3D11: per
+  `gs_begin_frame`). A frame whose `LastPresentTime` is 0 only moved the pointer and is not copied. The cursor is drawn
+  by the source from GDI (`cursor-capture.c`) on both renderers.
+* `DXGI_ERROR_ACCESS_LOST` (mode or resolution change, rotation, the secure desktop, a fullscreen switch) or any other
+  failure ends the duplication; the source creates it again after 3 s, as on D3D11. Rotation is applied at draw time
+  from the output's `DXGI_MODE_ROTATION`, as on D3D11.
+* On a Vulkan device loss the D3D11 device and the duplication stay, and only the imports are replaced: the same NT
+  handles are imported again (`slots::reimport`), and the D3D11 textures still hold the newest frame, so a static
+  desktop (which sends no new frames) is drawn again at once. The slot Vulkan held when the device was lost can stay
+  held: a keyed mutex acquired by a lost device is never released (still held after seconds, NVIDIA 621.24). Then
+  the slots are created again and the duplication is restarted on the same D3D11 device, whose first frame is the
+  whole desktop. On the other-adapter path the last staged frame is uploaded again. If the renderer comes back on
+  another adapter, the duplication is created again.
+* `OBS_DXGI_DUPLICATOR_TEST_HDR=1` asks DXGI for RGBA16F images only (DXGI converts an SDR desktop) and treats the
+  monitor as HDR (test hook).
+
+On Vulkan the source registered as `monitor_capture` is now this display capture (DXGI/WGC), as on D3D11, instead of
+the GDI monitor capture (`monitor-capture.c`), which Vulkan used before. Scenes made on D3D11 therefore keep working;
+the settings of a `monitor_capture` created on Vulkan before (the GDI source's `monitor` index) are not read by it.
 
 Hook files: on start-up win-capture copies its own graphics-hook into `%ProgramData%\obs-studio-hook` when its version
 is higher than the one there (`game-capture-file-init.c`, unchanged from OBS). Knurbs' hook is 1.8.8 and OBS Studio
@@ -286,6 +323,10 @@ sRGB conversion fails; RGBA16F: the dominant channel), both must show up, the me
 and the validation layer (with synchronization validation) must report nothing. Cases: game capture of a D3D11
 swap chain in each format and in memory mode, with the producer on the renderer's adapter and the hook the producer
 loaded checked against the data dir given; WGC of a D3D11 and of a GDI window, with RGBA16F frames, while the window
-keeps resizing; BitBlt of a GDI window; game capture and WGC across a simulated device loss. Each runs on the NVIDIA
-and the AMD adapter, and on the D3D11 renderer as a reference. `KNURBS_TEST_OBS_HOOK_DIR` (an OBS Studio
+keeps resizing; BitBlt of a GDI window; game capture and WGC across a simulated device loss; display capture of the primary monitor (DXGI and WGC; a topmost
+borderless window covers it with the pattern and hides the pointer) in SDR and RGBA16F, across a device loss, and
+across a change to a smaller resolution and back (`_mode`, which restores the original mode even when the test fails).
+The display cases need an unlocked, awake desktop (on the lock screen DXGI sends nothing and WGC sends the lock screen)
+and run per-monitor DPI aware, as OBS does. Each runs on the NVIDIA and the AMD adapter, and on the D3D11 renderer as a
+reference. `KNURBS_TEST_OBS_HOOK_DIR` (an OBS Studio
 installation's `data/obs-plugins/win-capture`) adds the game capture cases against that hook.
