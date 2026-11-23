@@ -766,6 +766,8 @@ void *obs_encoder_create_rerouted(obs_encoder_t *encoder, const char *reroute_id
 		if (ei->type != encoder->orig_info.type || astrcmpi(ei->codec, encoder->orig_info.codec) != 0) {
 			return NULL;
 		}
+		blog(LOG_INFO, "encoder '%s' (%s) rerouted to %s", encoder->context.name, encoder->orig_info.id,
+		     reroute_id);
 		encoder->info = *ei;
 		return encoder->info.create(encoder->context.settings, encoder);
 	}
