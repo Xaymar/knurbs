@@ -57,6 +57,9 @@ else()
   target_compile_options(libknurbs PRIVATE -Wall -Wextra)
 endif()
 
+# OBS adds -fno-char8_t for Clang (directory-wide on macOS); libknurbs needs char8_t, and target options come last.
+target_compile_options(libknurbs PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fchar8_t>)
+
 set_target_properties(
   libknurbs
   PROPERTIES OUTPUT_NAME knurbs VERSION 0.1.0 SOVERSION 0 CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
