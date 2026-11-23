@@ -1,6 +1,7 @@
 # libknurbs: a C++ core with a C API on top
 
-Status: design, not started. Requested by Xaymar on 2026-11-22.
+Status: design approved by Xaymar on 2026-11-23 (open to change before the
+1.0 ABI); implementation not started. Requested by Xaymar on 2026-11-22.
 
 ## Intent and why
 
@@ -58,10 +59,15 @@ These are not built by this project, but the core must not make them hard:
 - **A central account system that also registers outputs and services**
   (Twitch, YouTube and so on). The core keeps a service registry that an
   account provider plugin can add to and remove from at runtime.
-- **The Vulkan backend inside libknurbs**, with no separate graphics module.
-- **Plugins running out of process** through xaymar/datapath. Anything that
-  crosses the plugin boundary (frames, textures, settings) must be expressible
-  as data plus exportable handles (NT handles, file descriptors), never as raw
+- **The Vulkan backend inside libknurbs**, with no separate graphics module,
+  but still behind an internal RHI abstraction, so that a future Vulkan 2 (or
+  another API) can be added as a second backend without touching the rest of
+  the core (Xaymar, 2026-11-23).
+- **Every plugin running out of process** through xaymar/datapath, so that a
+  crashing plugin can't take Knurbs down. Each plugin process has its own
+  Vulkan instance and device (Xaymar, 2026-11-23). Anything that crosses the
+  plugin boundary (frames, textures, settings) must be expressible as data
+  plus exportable handles (NT handles, file descriptors), never as raw
   pointers into the core.
 
 ## Non-goals
@@ -96,10 +102,13 @@ These are not built by this project, but the core must not make them hard:
 - **C++23** (Xaymar, 2026-11-22). A feature may be used only when the oldest
   supported compiler on all three platforms has it. The builder records the
   minimum versions in `libknurbs/README.md`: current MSVC, GCC 14 (the Flatpak
-  SDK's), and the AppleClang release that first ships the features we need.
-  Verify AppleClang's libc++ before relying on any of these:
-  `std::move_only_function`, `std::print`, `std::flat_map`,
-  `std::jthread`/`std::stop_token`, and deducing `this`.
+  SDK's), and AppleClang. AppleClang supports the features we want
+  (`std::move_only_function`, `std::print`, `std::flat_map`,
+  `std::jthread`/`std::stop_token`, deducing `this`), but several of them need
+  a minimum macOS version higher than the default deployment target, because
+  parts of libc++ live in the OS (Xaymar, 2026-11-23). The builder works out
+  the lowest macOS version that covers the features actually used, and sets
+  `CMAKE_OSX_DEPLOYMENT_TARGET` to it.
 - **One standard library per platform**: MSVC STL on Windows, libstdc++ on
   Linux (Clang on Linux must also use libstdc++, never libc++), and libc++ on
   macOS. The C++ ABI promise only holds within that combination.
@@ -165,10 +174,21 @@ libknurbs/
   README.md                 toolchain minimums, allowed C++23 features
   include/knurbs/           installed C++ API  (knurbs/core.hpp, knurbs/source.hpp, ...)
   include/knurbs/c/         installed C API    (knurbs/c/core.h, knurbs/c/source.h, ...)
-  src/                      implementation; nothing here is installed
-  src/c/                    the C API layer
+  source/                   implementation; nothing here is installed
+  source/c/                 the C API layer
+  source/gpu/rhi/           the internal RHI interface
+  source/gpu/vulkan/        the Vulkan backend of the RHI
   tests/                    libknurbs tests (one file per area)
 ```
+
+Directory names are written out in full (`source`, not `src`), matching
+`include` (Xaymar, 2026-11-23).
+
+Namespaces are used like directories: related things get their own nested
+namespace (`knurbs::error`, `knurbs::gpu`, `knurbs::audio`, `knurbs::format`)
+rather than flat, C-style prefixed names in `knurbs::` (Xaymar, 2026-11-23).
+Internals live in `knurbs::detail` (or a nested `detail` inside the
+relevant namespace).
 
 Output names: `knurbs.dll`/`knurbs.lib` on Windows, `libknurbs.so.<major>` on
 Linux and `libknurbs.<major>.dylib` on macOS. The soname carries the major
@@ -186,15 +206,15 @@ class KNURBS_API source : public object {
 public:
 	std::string_view id() const noexcept;
 	std::string name() const;
-	void set_name(std::string_view name);   // throws knurbs::invalid_argument
+	void set_name(std::string_view name);   // throws knurbs::error::invalid_argument
 	ref<data> settings() const;
 	// ...
 protected:
-	source() = default;           // only src/ can construct
+	source() = default;           // only source/ can construct
 };
 }
 
-// src/source-impl.hpp (not installed)
+// source/source-impl.hpp (not installed)
 namespace knurbs::detail {
 class source_impl final : public knurbs::source { /* members */ };
 }
@@ -212,7 +232,7 @@ class:
 
 - **Core classes** (`source`, `canvas`, `data` and so on) have no data members
   in the public header and no virtual functions. They are created only by
-  `src/`, never by plugins, so their size and layout aren't part of the ABI.
+  `source/`, never by plugins, so their size and layout aren't part of the ABI.
   Adding non-virtual member functions is always safe, and so is adding
   members to the `_impl` class.
 - **Plugin interfaces** (`source_type`, `encoder_type` and so on) have
@@ -244,9 +264,12 @@ class:
   object is destroyed at 0, and the pin protocol makes weak-to-strong upgrades
   safe.
 - `knurbs::ref<T>` is an intrusive strong pointer and `knurbs::weak<T>` a weak
-  one. They are not `std::shared_ptr`: a raw `T*` has to be able to become a
-  `ref<T>` again when it comes back from the C API, and `shared_ptr` can't do
-  that without a separate control block.
+  one. They are not `std::shared_ptr`, because other languages bind to
+  libknurbs through the C API, and they need a count that lives in the object
+  and can be driven through plain functions (`knurbs_ref`/`knurbs_release`). A
+  raw `T*` coming back from the C API also has to be able to become a `ref<T>`
+  again, which `shared_ptr` can't do without its separate control block
+  (confirmed by Xaymar, 2026-11-23).
 - **Destruction context.** An object can say where its final teardown must run
   (for example sources on the core's destruction queue, GPU objects on the GPU
   thread). The last `release` then queues the teardown there instead of running
@@ -264,7 +287,7 @@ class:
   last release of the core) stops the threads in a defined order, releases
   everything the core itself holds, and marks every object it created as
   detached. A reference that outlives the core stays valid memory until it is
-  released, but every call on it throws `knurbs::core_gone`, and weak refs to
+  released, but every call on it throws `knurbs::error::core_gone`, and weak refs to
   it expire. Leftover references are logged in debug builds. Objects don't hold
   a strong reference to their core, so a forgotten reference can't keep a
   whole core alive. My call.
@@ -278,10 +301,12 @@ class:
   reasons: the success path costs nothing (the zero-cost model that compilers
   and CPUs have been tuned for), and constructors can fail properly, so a
   constructed object is always valid. All exceptions thrown by libknurbs
-  derive from `knurbs::error`, which derives from `std::runtime_error` and
-  carries a code from a public `knurbs::errc` enum. Subclasses (for example
-  `knurbs::not_found`, `knurbs::invalid_argument`, `knurbs::core_gone`,
-  `knurbs::gpu_lost`) exist where callers need to catch them separately.
+  live in the `knurbs::error` namespace (Xaymar, 2026-11-23) and derive from
+  `knurbs::error::exception`, which derives from `std::runtime_error` and
+  carries a code from the public `knurbs::error::code` enum. Subclasses (for
+  example `knurbs::error::not_found`, `knurbs::error::invalid_argument`,
+  `knurbs::error::core_gone`, `knurbs::error::gpu_lost`) exist where callers
+  need to catch them separately.
   Exceptions cross the C++ API boundary in both directions, which is safe
   because every platform has a single toolchain.
 - Exceptions are for errors, not for control flow. Lookups that can
@@ -310,7 +335,7 @@ class:
   an owner, and is joined at `core` shutdown in a defined order.
 - Locks use `std::mutex`, `std::shared_mutex` and `std::scoped_lock`, with no
   manual unlock paths. Recursive mutexes are allowed only where a documented
-  re-entrancy need exists. Each one is listed in `src/README.md` with its
+  re-entrancy need exists. Each one is listed in `source/README.md` with its
   reason.
 - Each lock has a documented level. In debug builds a lock-order checker
   catches inversions.
@@ -339,10 +364,14 @@ Each layer has its own tests and is usable before the next one starts.
    `add-knurbs-frontend`, patches 0001 and 0002 in the project files):
    discover without loading, load all in parallel, a barrier, then post-load
    all.
-4. **GPU:** the Vulkan backend, built from the libobs-vulkan code (after the
-   phase 2 work on the `vulkan-backend-foundations` branch lands in root), moved in as `src/gpu/` with a
-   C++ API for reference-counted GPU objects (textures, buffers, shaders,
-   frames). Exportable handles are used for every resource that can cross a
+4. **GPU:** a public, backend-neutral C++ API for reference-counted GPU
+   objects (textures, buffers, shaders, frames), built on an internal RHI
+   interface (`source/gpu/rhi/`). The only RHI backend is Vulkan
+   (`source/gpu/vulkan/`), built from the libobs-vulkan code after the phase 2
+   work on the `vulkan-backend-foundations` branch lands in root. Nothing
+   outside `source/gpu/vulkan/` includes Vulkan headers, so a Vulkan 2 backend
+   could be added beside it. The RHI is compiled into libknurbs, not loaded as
+   a module. Exportable handles are used for every resource that can cross a
    process or module boundary. The `.effect` shader format and the existing
    shader processor are carried over first; offline SPIR-V compilation is a
    later step.
@@ -350,6 +379,17 @@ Each layer has its own tests and is usable before the next one starts.
    GPU frames as reference-counted objects; conversion (matrix, range,
    transfer) as GPU passes. This replaces the parts of `media-io/` that deal
    with video.
+   - **Every frame carries all its metadata** (Xaymar, 2026-11-23): the pixel
+     format descriptor plus colour primaries, transfer function, matrix,
+     range, chroma siting, alpha mode (straight or premultiplied), HDR
+     metadata (mastering display, content light levels) and timing. A frame
+     without complete metadata can't be created.
+   - **The core does the rendering of frames, the same way everywhere.** A
+     source, filter or transition never picks its own conversion shader or
+     works out how to draw a given format, which is the libobs mess where every
+     plugin renders differently. It hands over or receives frames, and the
+     core converts them to whatever the consumer asked for (canvas format,
+     encoder format, preview) through one conversion path.
 6. **Sources, filters, transitions, scenes and canvases:** the source graph,
    with each canvas owning its own clock, frame rate, format, resolution and
    render schedule. There is one core clock (monotonic, in nanoseconds). Every
@@ -375,8 +415,17 @@ Each layer has its own tests and is usable before the next one starts.
   the plugin implements (`knurbs::source_instance` and so on). That object is
   itself a `knurbs::object`, so it is reference counted like everything else
   and holds its own state, with no `void *data` passed around. My call.
+- **Plugins will all run in their own process** (containerized through
+  datapath) so that a crashing plugin can't take Knurbs down, and each
+  plugin process has its own Vulkan context (Xaymar, 2026-11-23). Until
+  datapath exists, plugins load in-process, but they are already designed as
+  if they were out of process: a plugin never gets the core's `VkDevice` or
+  raw `VkImage`s. It gets GPU resources only as exported memory plus exported
+  synchronization (timeline semaphores or sync files), and imports them into
+  its own device. The in-process mode is a convenience, not a separate
+  model.
 - **Every interface must be proxyable** so that datapath can run the plugin in
-  another process later. In-process plugins get live objects. The datapath
+  another process. In-process plugins get live objects. The datapath
   host implements the same interfaces and forwards each call over IPC. For that
   to work, interface signatures may only use values that can be serialized
   (`data`, strings, numbers, format descriptors) and core objects (`ref<frame>`,
@@ -461,16 +510,29 @@ builder keeps a list of what was checked.
 - No OBS plugin compatibility. Containerization handles legacy plugins
   (2026-11-19).
 - Vulkan only. Metal is dropped and macOS runs on MoltenVK (2026-11-22).
+  Vulkan sits behind an internal RHI abstraction, for a possible Vulkan 2
+  (2026-11-23).
+- Intrusive `ref<T>`/`weak<T>`, not `std::shared_ptr`, because other
+  languages bind through the C API (2026-11-23).
+- No `obs_*` compatibility shim in libknurbs; plugin containerization covers
+  legacy plugins (2026-11-23).
+- Every plugin eventually runs in its own process with its own Vulkan
+  context (2026-11-23).
+- Every frame carries its complete metadata, and the core does all frame
+  rendering and conversion in one place (2026-11-23).
+- Exceptions live in `knurbs::error`; namespaces are used like directories
+  (2026-11-23).
+- `source/`, not `src/` (2026-11-23).
+- The design is good for now; it can still change before the 1.0 ABI
+  (2026-11-23).
 - Windows first (project direction).
 
 ## My calls (open to correction)
 
 - The derived-implementation pattern instead of pimpl for hiding internals.
-- Intrusive `ref<T>`/`weak<T>` instead of `std::shared_ptr`.
-- No `obs_*` compatibility shim in libknurbs at all.
 - cmocka for the new tests as well.
 - Inline refcount in `object` (the only public data member).
-- Shutdown with live references: detached objects that throw `knurbs::core_gone`.
+- Shutdown with live references: detached objects that throw `knurbs::error::core_gone`.
 - Per-instance plugin objects that are themselves `knurbs::object`s.
 - Every plugin interface proxyable for datapath; no raw pointers in signatures.
 - One core clock shared by all canvases and audio.
