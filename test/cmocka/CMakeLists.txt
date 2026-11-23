@@ -531,8 +531,16 @@ if(ENABLE_VULKAN)
           wgc_gdi
           wgc_gdi_resize
           bitblt_gdi
+          display_dxgi
+          display_dxgi_hdr
+          display_dxgi_loss
+          display_dxgi_mode
+          display_wgc
+          display_wgc_hdr
+          display_wgc_loss
+          display_wgc_mode
       )
-        if(NOT (_gpu STREQUAL "d3d11" AND _case MATCHES "_loss$")) # the device loss is simulated by libobs-vulkan
+        if(NOT (_gpu STREQUAL "d3d11" AND _case MATCHES "_loss$|^display_dxgi_hdr$")) # simulated by libobs-vulkan / the duplicator
           _win_capture_test(${_gpu}_${_case} ${_driver} "${_win_capture_data}" ${_case})
         endif()
       endforeach()

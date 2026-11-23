@@ -14,6 +14,13 @@
 //   wgc_d3d11            window capture, Windows Graphics Capture of a D3D11 (BGRA) window
 //   wgc_gdi              window capture, Windows Graphics Capture of a GDI window
 //   bitblt_gdi           window capture, BitBlt of a GDI window
+//   display_dxgi         display capture, DXGI desktop duplication of the primary monitor, which a topmost
+//                        borderless window covers with the pattern (the cursor is hidden over it)
+//   display_wgc          display capture, Windows Graphics Capture of the primary monitor
+//
+// Suffixes: _loss (simulated Vulkan device loss during the capture), _hdr (RGBA16F frames: OBS_WINRT_TEST_HDR,
+// OBS_DXGI_DUPLICATOR_TEST_HDR), _resize (the window keeps resizing), _mode (display cases: the monitor changes to a
+// smaller resolution for a few seconds and back; the original mode is restored even when the test fails).
 //
 // The data dir holds the hook binaries (graphics-hook64.dll, inject-helper64.exe, get-graphics-offsets64.exe); point
 // it at an OBS Studio installation's win-capture data dir to test against the official, signed hook.
@@ -68,6 +75,13 @@ static rgb colour_at(int phase, uint32_t x, uint32_t y)
 {
 	const int q = (y >= H / 2 ? 2 : 0) + (x >= W / 2 ? 1 : 0);
 	return COLOURS[(q + phase) % 4];
+}
+
+static RECT primary_monitor_rect()
+{
+	MONITORINFO mi = {sizeof(mi)};
+	GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi);
+	return mi.rcMonitor;
 }
 
 static int phase_now()
@@ -126,7 +140,8 @@ static std::vector<uint8_t> pattern_pixels(DXGI_FORMAT format, int phase, uint32
 }
 
 static int gdi_phase = 0;
-static bool gdi_resize = false; // "gdi_resize": the client area alternates between W x H and a larger size
+static bool gdi_monitor = false; // "monitor": a topmost borderless window covering the primary monitor
+static bool gdi_resize = false;  // "gdi_resize": the client area alternates between W x H and a larger size
 static int gdi_size = 0;
 
 static void set_client_size(HWND wnd, uint32_t w, uint32_t h)
@@ -143,11 +158,14 @@ static LRESULT CALLBACK producer_wndproc(HWND wnd, UINT msg, WPARAM wp, LPARAM l
 	case WM_PAINT: {
 		PAINTSTRUCT ps;
 		HDC dc = BeginPaint(wnd, &ps);
+		RECT client;
+		GetClientRect(wnd, &client);
+		const LONG cw = gdi_monitor ? client.right : (LONG)W, ch = gdi_monitor ? client.bottom : (LONG)H;
 		for (int q = 0; q < 4; ++q) {
-			const uint32_t x = (q & 1) ? W / 2 : 0, y = (q & 2) ? H / 2 : 0;
-			const rgb c = colour_at(gdi_phase, x, y);
+			const LONG x = (q & 1) ? cw / 2 : 0, y = (q & 2) ? ch / 2 : 0;
+			const rgb c = COLOURS[(q + gdi_phase) % 4];
 			HBRUSH br = CreateSolidBrush(RGB(lrintf(c.r * 255), lrintf(c.g * 255), lrintf(c.b * 255)));
-			RECT r = {(LONG)x, (LONG)y, (LONG)(x + W / 2), (LONG)(y + H / 2)};
+			RECT r = {x, y, (q & 1) ? cw : cw / 2, (q & 2) ? ch : ch / 2};
 			FillRect(dc, &r, br);
 			DeleteObject(br);
 		}
@@ -162,6 +180,20 @@ static LRESULT CALLBACK producer_wndproc(HWND wnd, UINT msg, WPARAM wp, LPARAM l
 		if (gdi_resize && (int)((GetTickCount64() / 700) % 2) != gdi_size) {
 			gdi_size = !gdi_size;
 			set_client_size(wnd, gdi_size ? W + 80 : W, gdi_size ? H + 60 : H);
+		}
+		return 0;
+	case WM_SETCURSOR:
+		if (gdi_monitor) {
+			SetCursor(nullptr); // the pattern must not have a pointer on it
+			return TRUE;
+		}
+		break;
+	case WM_DISPLAYCHANGE:
+		if (gdi_monitor) { // follow the monitor's new resolution
+			const RECT m = primary_monitor_rect();
+			SetWindowPos(wnd, HWND_TOPMOST, m.left, m.top, m.right - m.left, m.bottom - m.top,
+				     SWP_NOACTIVATE);
+			InvalidateRect(wnd, nullptr, FALSE);
 		}
 		return 0;
 	case WM_DESTROY:
@@ -183,19 +215,30 @@ static int producer_main(const char *mode, const char *title_utf8, const char *l
 	wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
 	RegisterClassW(&wc);
+	gdi_monitor = !strcmp(mode, "monitor");
 	RECT r = {0, 0, (LONG)W, (LONG)H};
-	const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+	DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
 	AdjustWindowRect(&r, style, FALSE);
-	HWND wnd = CreateWindowExW(WS_EX_TOPMOST, CLASS_NAME, title, style, 64, 64, r.right - r.left, r.bottom - r.top,
+	LONG x = 64, y = 64;
+	if (gdi_monitor) {
+		style = WS_POPUP;
+		r = primary_monitor_rect();
+		x = r.left;
+		y = r.top;
+	}
+	HWND wnd = CreateWindowExW(WS_EX_TOPMOST, CLASS_NAME, title, style, x, y, r.right - r.left, r.bottom - r.top,
 				   nullptr, nullptr, wc.hInstance, nullptr);
 	if (!wnd) {
 		return 1;
 	}
 	ShowWindow(wnd, SW_SHOWNOACTIVATE);
+	if (gdi_monitor) { // above the taskbar
+		SetWindowPos(wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+	}
 	UpdateWindow(wnd);
 
 	gdi_resize = !strcmp(mode, "gdi_resize");
-	if (!strcmp(mode, "gdi") || gdi_resize) {
+	if (!strcmp(mode, "gdi") || gdi_resize || gdi_monitor) {
 		SetTimer(wnd, 1, 15, nullptr);
 		MSG msg;
 		while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
@@ -275,7 +318,10 @@ static int producer_main(const char *mode, const char *title_utf8, const char *l
 static int argc_;
 static char **argv_;
 static std::mutex log_lock;
-static std::atomic<bool> rebuilt{false}; // libobs-vulkan rebuilt the device (the "_loss" cases)
+static std::atomic<bool> rebuilt{false};  // libobs-vulkan rebuilt the device (the "_loss" cases)
+static std::atomic<bool> restored{false}; // the display mode is back (the "_mode" cases)
+// When the device was rebuilt or the mode restored (os_gettime_ns): frames rendered from then on count as "after".
+static std::atomic<uint64_t> marker_ts{0};
 static std::string log_text;
 
 static void log_handler(int level, const char *format, va_list args, void *)
@@ -283,6 +329,7 @@ static void log_handler(int level, const char *format, va_list args, void *)
 	char line[4096];
 	vsnprintf(line, sizeof(line), format, args);
 	if (strstr(line, "[libobs-vulkan] device rebuilt (")) {
+		marker_ts = os_gettime_ns();
 		rebuilt = true;
 	}
 	{
@@ -315,7 +362,10 @@ static int times_logged(const char *s)
 struct frame_stats {
 	std::mutex lock;
 	int black = 0, phase[2] = {0, 0}, bad = 0, transitions = 0, last = -1;
-	int after_rebuild[2] = {0, 0}; // frames of each phase after a device rebuild
+	int after_rebuild[2] = {0, 0}; // frames of each phase rendered after a device rebuild or the mode restore
+	int bad_after = 0;             // bad frames rendered after it
+	int bad_black = 0;             // bad frames that are entirely black
+	uint64_t last_bad_ts = 0;      // when the last bad frame was rendered
 	std::string first_bad;
 	bool float_format = false;
 };
@@ -379,10 +429,15 @@ static void on_frame(void *, struct video_data *frame)
 			stats->first_bad = s;
 		}
 		++stats->bad;
+		stats->bad_black += black;
+		stats->last_bad_ts = frame->timestamp;
+		if (marker_ts && frame->timestamp >= marker_ts) {
+			++stats->bad_after;
+		}
 		return;
 	}
 	++stats->phase[found];
-	if (rebuilt) {
+	if (marker_ts && frame->timestamp >= marker_ts) {
 		++stats->after_rebuild[found];
 	}
 	if (stats->last >= 0 && stats->last != found) {
@@ -444,14 +499,17 @@ static std::string loaded_hook(DWORD pid)
 	return path;
 }
 
-static int reset_video(const char *module)
+// The canvas is W x H, or the monitor's size for the display cases (the output is scaled to W x H).
+static int reset_video(const char *module, uint32_t base_w = W, uint32_t base_h = H)
 {
 	obs_video_info ovi = {};
 	ovi.graphics_module = module;
 	ovi.fps_num = 60;
 	ovi.fps_den = 1;
-	ovi.base_width = ovi.output_width = W;
-	ovi.base_height = ovi.output_height = H;
+	ovi.base_width = base_w;
+	ovi.base_height = base_h;
+	ovi.output_width = W;
+	ovi.output_height = H;
 	ovi.output_format = VIDEO_FORMAT_BGRA;
 	ovi.gpu_conversion = true;
 	ovi.colorspace = VIDEO_CS_SRGB;
@@ -460,6 +518,112 @@ static int reset_video(const char *module)
 	const char *adapter = getenv("OBS_TEST_ADAPTER");
 	ovi.adapter = adapter ? (uint32_t)atoi(adapter) : 0;
 	return obs_reset_video(&ovi);
+}
+
+/* ---- display mode change (the "_mode" cases) ---- */
+
+static wchar_t mode_device[CCHDEVICENAME];
+static bool mode_changed = false;
+
+static void restore_display_mode()
+{
+	if (mode_changed) {
+		ChangeDisplaySettingsExW(mode_device, nullptr, nullptr, 0, nullptr); // back to the registry's mode
+		mode_changed = false;
+	}
+}
+
+static BOOL WINAPI restore_on_ctrl(DWORD)
+{
+	restore_display_mode();
+	return FALSE;
+}
+
+static LONG WINAPI restore_on_crash(EXCEPTION_POINTERS *)
+{
+	restore_display_mode();
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// A temporary (CDS_FULLSCREEN) mode of the primary monitor with a smaller resolution at the same refresh rate.
+static bool change_display_mode(uint32_t &w, uint32_t &h)
+{
+	MONITORINFOEXW mi = {};
+	mi.cbSize = sizeof(mi);
+	GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi);
+	wcscpy_s(mode_device, mi.szDevice);
+	DEVMODEW cur = {};
+	cur.dmSize = sizeof(cur);
+	if (!EnumDisplaySettingsW(mode_device, ENUM_CURRENT_SETTINGS, &cur)) {
+		return false;
+	}
+	DEVMODEW best = {};
+	for (DWORD i = 0;; ++i) {
+		DEVMODEW dm = {};
+		dm.dmSize = sizeof(dm);
+		if (!EnumDisplaySettingsW(mode_device, i, &dm)) {
+			break;
+		}
+		if (dm.dmBitsPerPel == cur.dmBitsPerPel && dm.dmDisplayFrequency == cur.dmDisplayFrequency &&
+		    dm.dmPelsWidth < cur.dmPelsWidth && dm.dmPelsHeight < cur.dmPelsHeight && dm.dmPelsWidth >= 1024 &&
+		    dm.dmPelsWidth > best.dmPelsWidth) {
+			best = dm;
+		}
+	}
+	if (!best.dmPelsWidth) {
+		return false;
+	}
+	best.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
+	SetConsoleCtrlHandler(restore_on_ctrl, TRUE);
+	SetUnhandledExceptionFilter(restore_on_crash);
+	mode_changed = true;
+	if (ChangeDisplaySettingsExW(mode_device, &best, nullptr, CDS_FULLSCREEN, nullptr) != DISP_CHANGE_SUCCESSFUL) {
+		mode_changed = false;
+		return false;
+	}
+	w = best.dmPelsWidth;
+	h = best.dmPelsHeight;
+	return true;
+}
+
+// The display capture's monitor_id for the primary monitor (as duplicator-monitor-capture lists it).
+static std::string primary_monitor_id()
+{
+	MONITORINFOEXA mi = {};
+	mi.cbSize = sizeof(mi);
+	GetMonitorInfoA(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi);
+	DISPLAY_DEVICEA dd = {sizeof(dd)};
+	if (EnumDisplayDevicesA(mi.szDevice, 0, &dd, EDD_GET_DEVICE_INTERFACE_NAME)) {
+		return dd.DeviceID;
+	}
+	return mi.szDevice;
+}
+
+// Whether the primary monitor is an output of the adapter with this LUID.
+static bool primary_monitor_on(uint64_t luid_value)
+{
+	const HMONITOR monitor = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+	IDXGIFactory1 *f = nullptr;
+	if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&f))) {
+		return false;
+	}
+	bool on = false;
+	IDXGIAdapter1 *a = nullptr;
+	for (UINT i = 0; !on && f->EnumAdapters1(i, &a) == S_OK; ++i) {
+		DXGI_ADAPTER_DESC1 ad;
+		a->GetDesc1(&ad);
+		uint64_t l;
+		memcpy(&l, &ad.AdapterLuid, 8);
+		IDXGIOutput *o = nullptr;
+		for (UINT j = 0; !on && a->EnumOutputs(j, &o) == S_OK; ++j) {
+			DXGI_OUTPUT_DESC od;
+			on = SUCCEEDED(o->GetDesc(&od)) && od.Monitor == monitor && l == luid_value;
+			o->Release();
+		}
+		a->Release();
+	}
+	f->Release();
+	return on;
 }
 
 static void skip_test(void *own, const char *why)
@@ -478,14 +642,18 @@ static void test_capture(void **)
 		const size_t n = strlen(s);
 		return c.size() > n && c.compare(c.size() - n, n, s) == 0;
 	};
-	const bool loss = suffix("_loss");     // the Vulkan device is lost (simulated) during the capture
-	const bool hdr = suffix("_hdr");       // WGC delivers RGBA16F frames (OBS_WINRT_TEST_HDR)
-	const bool resize = suffix("_resize"); // the window keeps changing size
-	const std::string base = loss || hdr ? c.substr(0, c.rfind('_')) : c;
+	const bool loss = suffix("_loss");        // the Vulkan device is lost (simulated) during the capture
+	const bool hdr = suffix("_hdr");          // WGC delivers RGBA16F frames (OBS_WINRT_TEST_HDR)
+	const bool resize = suffix("_resize");    // the window keeps changing size
+	const bool mode_change = suffix("_mode"); // the monitor's resolution changes and back
+	const std::string base = loss || hdr || mode_change ? c.substr(0, c.rfind('_')) : c;
+	const bool display = base.rfind("display_", 0) == 0;
+	const bool display_dxgi = base == "display_dxgi";
 	const bool game = base.rfind("game_", 0) == 0;
 	const bool shmem = base == "game_shmem_bgra";
 	const bool wgc = base.rfind("wgc_", 0) == 0;
 	const std::string mode = game                                    ? (shmem ? "bgra" : base.substr(5))
+				 : display                               ? "monitor"
 				 : resize                                ? "gdi_resize"
 				 : base.find("gdi") != std::string::npos ? "gdi"
 									 : "bgra";
@@ -495,6 +663,7 @@ static void test_capture(void **)
 	}
 	if (hdr) {
 		_putenv_s("OBS_WINRT_TEST_HDR", "1");
+		_putenv_s("OBS_DXGI_DUPLICATOR_TEST_HDR", "1");
 	}
 
 	const bool d3d11 = strstr(vulkan, "d3d11") != nullptr;
@@ -520,7 +689,10 @@ static void test_capture(void **)
 #pragma warning(disable : 4996)
 	obs_add_data_path(OBS_SOURCE_DIR "/libobs/data/");
 #pragma warning(pop)
-	const int r = reset_video(vulkan);
+	const RECT monitor_rect = primary_monitor_rect();
+	const uint32_t canvas_w = display ? (uint32_t)(monitor_rect.right - monitor_rect.left) : W;
+	const uint32_t canvas_h = display ? (uint32_t)(monitor_rect.bottom - monitor_rect.top) : H;
+	const int r = reset_video(vulkan, canvas_w, canvas_h);
 	if (r == OBS_VIDEO_NOT_SUPPORTED) {
 		skip_test(own, "no Vulkan device");
 	}
@@ -559,7 +731,12 @@ static void test_capture(void **)
 
 	obs_data_t *settings = obs_data_create();
 	obs_source_t *source = nullptr;
-	if (game) {
+	if (display) {
+		obs_data_set_string(settings, "monitor_id", primary_monitor_id().c_str());
+		obs_data_set_int(settings, "method", display_dxgi ? 1 : 2);
+		obs_data_set_bool(settings, "capture_cursor", true); // hidden over the pattern window
+		source = obs_source_create("monitor_capture", "capture", settings, nullptr);
+	} else if (game) {
 		obs_data_set_string(settings, "capture_mode", "window");
 		obs_data_set_string(settings, "window", window.c_str());
 		obs_data_set_int(settings, "priority", 1); // exact title
@@ -587,7 +764,20 @@ static void test_capture(void **)
 	conv.range = VIDEO_RANGE_FULL;
 	conv.colorspace = VIDEO_CS_SRGB;
 	obs_add_raw_video_callback(&conv, on_frame, nullptr);
-	obs_set_output_source(0, source);
+	// Display cases: the source fills the canvas whatever the monitor's resolution (the "_mode" cases change it).
+	obs_scene_t *scene = nullptr;
+	if (display) {
+		scene = obs_scene_create_private("display");
+		obs_sceneitem_t *item = obs_scene_add(scene, source);
+		vec2 bounds = {(float)canvas_w, (float)canvas_h};
+		obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_STRETCH);
+		obs_sceneitem_set_bounds(item, &bounds);
+		obs_set_output_source(0, obs_scene_get_source(scene));
+	} else {
+		obs_set_output_source(0, source);
+	}
+	const bool dxgi_on_renderer = display_dxgi && !d3d11 && primary_monitor_on(luid_value);
+	uint32_t mode_w = 0, mode_h = 0;
 
 	// Up to 20 s for the hook or the capture to start, then 4 s of frames.
 	const uint64_t start = os_gettime_ns();
@@ -606,16 +796,37 @@ static void test_capture(void **)
 		if (rebuilt && !rebuilt_at) {
 			rebuilt_at = now;
 		}
-		if (loss    ? (rebuilt_at && now - rebuilt_at > 3000000000ull) || now - start > 40000000000ull
-		    : first ? now - first > 4000000000ull
-			    : now - start > 20000000000ull) {
+		// the "_mode" cases: 1.5 s after the first frame the resolution changes for 4 s, then 5 s more (the
+		// duplication is created again 3 s after it was lost)
+		static uint64_t changed_at = 0, restored_at = 0;
+		if (mode_change && first && !changed_at && now - first > 1500000000ull) {
+			changed_at = now;
+			if (!change_display_mode(mode_w, mode_h)) {
+				fail_msg("cannot change the display mode");
+			}
+			print_message("display mode changed to %ux%u\n", mode_w, mode_h);
+		}
+		if (changed_at && !restored_at && now - changed_at > 4000000000ull) {
+			restore_display_mode();
+			restored_at = now;
+			print_message("display mode restored\n");
+			marker_ts = now;
+			restored = true;
+		}
+		if (mode_change ? restored_at && now - restored_at > 6000000000ull
+		    : loss      ? (rebuilt_at && now - rebuilt_at > 3000000000ull) || now - start > 40000000000ull
+		    : first     ? now - first > 4000000000ull
+				: now - start > 20000000000ull) {
 			break;
 		}
 	}
 
+	const uint64_t stop_ts = os_gettime_ns();
 	const std::string hook = game ? loaded_hook(pi.dwProcessId) : std::string();
+	restore_display_mode();
 	obs_set_output_source(0, nullptr);
 	obs_remove_raw_video_callback(on_frame, nullptr);
+	obs_scene_release(scene);
 	obs_source_release(source);
 	obs_wait_for_destroy_queue();
 	// window capture frees its capture in a graphics task (wc_destroy): let it run before the device goes
@@ -630,11 +841,12 @@ static void test_capture(void **)
 	FreeLibrary(preloaded);
 	FreeLibrary(winrt);
 
-	print_message("%s: %d black (before capture), phase 0: %d, phase 1: %d, transitions %d, bad %d\n", name,
-		      st.black, st.phase[0], st.phase[1], st.transitions, st.bad);
-	if (loss) {
-		print_message("after the device rebuild: phase 0: %d, phase 1: %d\n", st.after_rebuild[0],
-			      st.after_rebuild[1]);
+	print_message("%s: %d black (before capture), phase 0: %d, phase 1: %d, transitions %d, bad %d (%d black)\n",
+		      name, st.black, st.phase[0], st.phase[1], st.transitions, st.bad, st.bad_black);
+	if (loss || mode_change) {
+		print_message("after the %s: phase 0: %d, phase 1: %d, bad %d\n",
+			      loss ? "device rebuild" : "mode restore", st.after_rebuild[0], st.after_rebuild[1],
+			      st.bad_after);
 	}
 	if (!st.first_bad.empty()) {
 		print_message("first bad frame: %s\n", st.first_bad.c_str());
@@ -650,9 +862,33 @@ static void test_capture(void **)
 		assert_non_null(_fullpath(got, hook.c_str(), MAX_PATH));
 		assert_int_equal(_stricmp(want, got), 0);
 		assert_true(logged(shmem ? "memory capture successful" : "shared texture capture successful"));
-	} else if (wgc && !d3d11) {
+	} else if ((wgc || base == "display_wgc") && !d3d11) {
 		if (!logged("capturing through a D3D11 device")) {
-			fail_msg("window capture did not use Windows Graphics Capture through the D3D11 bridge");
+			fail_msg("the capture did not use Windows Graphics Capture through the D3D11 bridge");
+		}
+	} else if (display_dxgi && !d3d11) {
+		// On the renderer's adapter: shared textures; on the other adapter (the monitor's GPU is not the
+		// renderer's): through the CPU.
+		print_message("primary monitor on the renderer's adapter: %s\n", dxgi_on_renderer ? "yes" : "no");
+		if (!logged(dxgi_on_renderer
+				    ? "the renderer's adapter: one GPU copy per frame into shared textures"
+				    : "another adapter than the renderer's: frames are copied through the CPU")) {
+			fail_msg("DXGI duplication did not take the expected path");
+		}
+		const int sets = times_logged(dxgi_on_renderer ? "[dxgi-duplicator] Vulkan: shared textures"
+							       : "[dxgi-duplicator] Vulkan: CPU copy textures");
+		print_message("frame texture sets created: %d\n", sets);
+		assert_true(sets >= 1);
+	}
+	if (mode_change) {
+		char want[64];
+		snprintf(want, sizeof(want), "%ux%u", mode_w, mode_h);
+		const int starts = times_logged(display_dxgi ? (d3d11 ? "update settings" : "Vulkan: duplicating")
+							     : "Vulkan: capturing through");
+		print_message("captures started: %d\n", starts);
+		if (display_dxgi && !d3d11) {
+			assert_true(starts >= 3);  // the duplication is lost twice and created again
+			assert_true(logged(want)); // textures (or the duplication) at the other resolution
 		}
 	}
 
@@ -661,10 +897,24 @@ static void test_capture(void **)
 	// Game capture has no synchronisation with the hook (as on D3D11), so a frame torn between phases is possible
 	// in principle; every other path must be exact.
 	const int total = st.phase[0] + st.phase[1] + st.bad;
-	if (loss) {
+	if (mode_change) {
+		// The capture stops while the monitor changes mode (DXGI: lost, created again 3 s later, as on D3D11):
+		// black frames then, but no garbage, and every frame of the last 2 s is right.
+		assert_true(restored);
+		assert_true(st.after_rebuild[0] >= 5 && st.after_rebuild[1] >= 5);
+		assert_true((st.bad - st.bad_black) * 20 <= total);
+		if (st.bad) {
+			print_message("last bad frame %.1f s before the end\n",
+				      (double)(stop_ts - st.last_bad_ts) / 1e9);
+		}
+		assert_true(st.last_bad_ts + 2000000000ull < stop_ts);
+	} else if (loss) {
+		// Frames rendered while the device was lost (the simulated loss lasts a few frames) may be anything;
+		// from the rebuild on the capture must be right at once.
 		assert_true(rebuilt);
 		assert_true(st.after_rebuild[0] >= 5 && st.after_rebuild[1] >= 5);
-		assert_true(st.bad * 50 <= total); // frames rendered while the device was lost
+		assert_true(st.bad_after <= 1);
+		assert_true(st.bad <= 40);
 	} else if (resize) {
 		// new shared textures for every size; frames delivered while the window resizes may be partial
 		const int sizes = times_logged("[winrt-capture] Vulkan: shared textures");
@@ -688,6 +938,12 @@ static void test_capture(void **)
 
 int main(int argc, char **argv)
 {
+	// The display cases run per-monitor DPI aware, as OBS Studio does (its manifest): DXGI's DuplicateOutput1 needs it,
+	// and the pattern window then covers the monitor in physical pixels.
+	if ((argc == 5 && !strcmp(argv[1], "producer") && !strcmp(argv[2], "monitor")) ||
+	    (argc >= 5 && !strncmp(argv[4], "display_", 8))) {
+		SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+	}
 	if (argc == 5 && !strcmp(argv[1], "producer")) {
 		return producer_main(argv[2], argv[3], argv[4]);
 	}
