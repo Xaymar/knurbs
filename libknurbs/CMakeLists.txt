@@ -16,6 +16,8 @@ endif()
 
 include(GNUInstallDirs)
 
+find_package(nlohmann_json 3.11 REQUIRED)
+
 add_library(libknurbs SHARED)
 add_library(knurbs::knurbs ALIAS libknurbs)
 
@@ -24,6 +26,8 @@ target_sources(
   PRIVATE
     source/core-impl.hpp
     source/core.cpp
+    source/data-impl.hpp
+    source/data.cpp
     source/error.cpp
     source/log.cpp
     source/naming.cpp
@@ -38,6 +42,7 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_compile_features(libknurbs PUBLIC cxx_std_23)
+target_link_libraries(libknurbs PRIVATE nlohmann_json::nlohmann_json)
 target_compile_definitions(libknurbs PRIVATE KNURBS_BUILDING)
 # naming::check_key is compiled into the library, so its checking is controlled by the library's own definition:
 # on for Debug builds and whenever tests are built.
