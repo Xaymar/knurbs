@@ -148,7 +148,8 @@ int os_process_pipe_destroy(os_process_pipe_t *pp)
 	int ret = 0;
 
 	if (pp) {
-		int status;
+		int status = 0;
+		pid_t waited;
 
 		fclose(pp->file);
 		pp->file = NULL;
@@ -157,11 +158,14 @@ int os_process_pipe_destroy(os_process_pipe_t *pp)
 		pp->err_file = NULL;
 
 		do {
-			ret = waitpid(pp->pid, &status, 0);
-		} while (ret == -1 && errno == EINTR);
+			waited = waitpid(pp->pid, &status, 0);
+		} while (waited == -1 && errno == EINTR);
 
-		if (WIFEXITED(status))
+		/* a process that did not exit on its own (killed by a signal) has no exit code */
+		if (waited == pp->pid && WIFEXITED(status))
 			ret = (int)(char)WEXITSTATUS(status);
+		else
+			ret = -1;
 		bfree(pp);
 	}
 

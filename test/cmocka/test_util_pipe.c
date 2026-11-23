@@ -151,6 +151,11 @@ static void error_test(void **state)
 	read_all(pp, buf, sizeof(buf), true);
 	assert_non_null(strstr(buf, "no-such-program-for-obs-tests"));
 	assert_int_equal(os_process_pipe_destroy(pp), 127);
+
+	/* Regression: a process killed by a signal has no exit code; destroy returned its pid */
+	pp = os_process_pipe_create("kill -9 $$", "r");
+	assert_non_null(pp);
+	assert_int_equal(os_process_pipe_destroy(pp), -1);
 #endif
 	os_process_args_t *args = os_process_args_create(missing);
 	assert_null(os_process_pipe_create2(args, "r"));
