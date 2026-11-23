@@ -397,17 +397,20 @@ set_tests_properties(
   PROPERTIES ENVIRONMENT_MODIFICATION "${_obs_runtime_env}"
 )
 
-# Tests that start libobs: run from the rundir so libobs finds its data files (../../data/libobs)
+# Tests that start libobs: run from the rundir so libobs finds its data files, which it looks for relative to the
+# working directory: ../../data/libobs from bin/64bit on Windows, share/obs/libobs from the rundir root on Linux
 if(TARGET libobs-null)
+  if(OS_WINDOWS)
+    set(_obs_rundir_work_dir "${OBS_OUTPUT_DIR}/$<CONFIG>/${OBS_EXECUTABLE_DESTINATION}")
+  else()
+    set(_obs_rundir_work_dir "${OBS_OUTPUT_DIR}/$<CONFIG>")
+  endif()
+
   # Canvas weak reference regression test
   add_executable(test_obs_canvas_weak test_obs_canvas_weak.c)
   target_include_directories(test_obs_canvas_weak PRIVATE ${CMOCKA_INCLUDE_DIR})
   target_link_libraries(test_obs_canvas_weak PRIVATE OBS::libobs cmocka::cmocka)
-  add_test(
-    NAME test_obs_canvas_weak
-    COMMAND test_obs_canvas_weak
-    WORKING_DIRECTORY "${OBS_OUTPUT_DIR}/$<CONFIG>/${OBS_EXECUTABLE_DESTINATION}"
-  )
+  add_test(NAME test_obs_canvas_weak COMMAND test_obs_canvas_weak WORKING_DIRECTORY "${_obs_rundir_work_dir}")
 
   # Video thread on the null graphics module
   add_executable(test_obs_video_null test_obs_video_null.c)
@@ -415,16 +418,20 @@ if(TARGET libobs-null)
   target_link_libraries(test_obs_video_null PRIVATE OBS::libobs cmocka::cmocka)
   target_compile_definitions(test_obs_video_null PRIVATE NULL_GRAPHICS_MODULE="$<TARGET_FILE:libobs-null>")
   add_dependencies(test_obs_video_null libobs-null)
-  add_test(
-    NAME test_obs_video_null
-    COMMAND test_obs_video_null
-    WORKING_DIRECTORY "${OBS_OUTPUT_DIR}/$<CONFIG>/${OBS_EXECUTABLE_DESTINATION}"
-  )
+  add_test(NAME test_obs_video_null COMMAND test_obs_video_null WORKING_DIRECTORY "${_obs_rundir_work_dir}")
 
-  set_tests_properties(test_obs_canvas_weak test_obs_video_null PROPERTIES ENVIRONMENT_MODIFICATION "${_obs_runtime_env}")
+  set_tests_properties(
+    test_obs_canvas_weak
+    test_obs_video_null
+    PROPERTIES ENVIRONMENT_MODIFICATION "${_obs_runtime_env}"
+  )
 endif()
 
-foreach(test IN ITEMS test_serializer test_darray test_bitstream test_os_path test_obs_canvas_weak test_obs_video_null)
+foreach(
+  test
+  IN
+  ITEMS test_serializer test_darray test_bitstream test_os_path test_obs_canvas_weak test_obs_video_null
+)
   if(TARGET ${test})
     add_dependencies(obs-unit-tests ${test})
   endif()
@@ -483,15 +490,7 @@ foreach(
 endforeach()
 
 # graphics/ math
-foreach(
-  test
-  IN
-  ITEMS
-    test_graphics_vec
-    test_graphics_matrix
-    test_graphics_geometry
-    test_graphics_shader_parser
-)
+foreach(test IN ITEMS test_graphics_vec test_graphics_matrix test_graphics_geometry test_graphics_shader_parser)
   obs_add_unit_test(${test})
 endforeach()
 
@@ -510,15 +509,7 @@ foreach(
 endforeach()
 
 # core/
-foreach(
-  test
-  IN
-  ITEMS
-    test_obs_data
-    test_obs_properties
-    test_callback
-    test_obs_codec_helpers
-)
+foreach(test IN ITEMS test_obs_data test_obs_properties test_callback test_obs_codec_helpers)
   obs_add_graphics_test(${test})
 endforeach()
 
