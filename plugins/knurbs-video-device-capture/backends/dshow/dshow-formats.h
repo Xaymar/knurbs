@@ -2,10 +2,8 @@
  * DirectShow video formats as "pixel-format" FourCCs, and the frame rates
  * the DirectShow backend lists.
  *
- * Shared by the DirectShow backend and the settings migration, which
- * builds on every platform. The values are libdshowcapture's
- * DShow::VideoFormat, which the old source saved as "video_format"; the
- * backend checks them against the enum at compile time.
+ * The values are libdshowcapture's DShow::VideoFormat; the backend checks
+ * them against the enum at compile time.
  *
  * The FourCCs are the V4L2/DRM names where one exists, so a saved format
  * means the same thing on every platform: YUY2 is "YUYV", I420 is "YU12",
@@ -52,16 +50,6 @@ static const struct vd_dshow_format vd_dshow_formats[] = {
 };
 
 #define VD_DSHOW_NUM_FORMATS (sizeof(vd_dshow_formats) / sizeof(vd_dshow_formats[0]))
-
-static inline const char *vd_dshow_format_fourcc(int value)
-{
-	for (size_t i = 0; i < VD_DSHOW_NUM_FORMATS; i++) {
-		if (vd_dshow_formats[i].value == value) {
-			return vd_dshow_formats[i].fourcc;
-		}
-	}
-	return NULL;
-}
 
 /* 0 (DShow::VideoFormat::Any) for an empty or unknown FourCC. */
 static inline int vd_dshow_format_value(const char *fourcc)
@@ -119,16 +107,4 @@ static const struct vd_dshow_frame_rate vd_dshow_frame_rates[] = {
 static inline long long vd_dshow_interval(long long num, long long den)
 {
 	return num > 0 ? den * 10000000LL / num : 0;
-}
-
-/* The listed rate an interval stands for, or NULL. */
-static inline const struct vd_dshow_frame_rate *vd_dshow_find_frame_rate(long long interval)
-{
-	for (size_t i = 0; i < VD_DSHOW_NUM_FRAME_RATES; i++) {
-		long long diff = vd_dshow_interval(vd_dshow_frame_rates[i].num, vd_dshow_frame_rates[i].den) - interval;
-		if (diff > -VD_DSHOW_INTERVAL_TOLERANCE && diff < VD_DSHOW_INTERVAL_TOLERANCE) {
-			return &vd_dshow_frame_rates[i];
-		}
-	}
-	return NULL;
 }
