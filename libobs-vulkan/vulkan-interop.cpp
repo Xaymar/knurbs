@@ -534,7 +534,7 @@ static void set_external_textures(gs_device *d, gs_texture *tex, gs_texture *tex
 		t->memory_size = size;
 		t->export_types = export_types;
 		t->layout = layout;
-		t->create_flags = flags & GS_RENDER_TARGET;
+		t->create_flags = flags & (GS_RENDER_TARGET | GS_SHADER_STORAGE);
 		t->keyed_mutex = keyed_mutex;
 	}
 	(void)d;

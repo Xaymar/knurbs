@@ -25,6 +25,7 @@
 #include <xf86drm.h>
 
 #include <atomic>
+#include <cmath>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -102,6 +103,9 @@ static void (*sync_destroy)(gs_device_t *, gs_sync_t *);
 static bool (*sync_export_point)(gs_device_t *, gs_sync_t *, int, uint64_t);
 static bool (*sync_signal_point)(gs_device_t *, int, uint64_t);
 static bool (*sync_wait)(gs_device_t *, gs_sync_t *);
+static gs_stagesurf_t *(*stagesurface_create_p010)(gs_device_t *, uint32_t, uint32_t);
+static bool (*yuv_compute_available)(gs_device_t *, enum gs_shared_layout, bool);
+static bool (*texture_convert_yuv)(gs_device_t *, gs_texture_t *, gs_texture_t *, const struct gs_yuv_conversion *);
 
 template<typename T> static bool load(T &fn, const char *name)
 {
@@ -146,7 +150,10 @@ static bool load_all()
 	       load(sync_destroy, "device_sync_destroy") &
 	       load(sync_export_point, "device_sync_export_syncobj_timeline_point") &
 	       load(sync_signal_point, "device_sync_signal_syncobj_timeline_point") &
-	       load(sync_wait, "device_sync_wait");
+	       load(sync_wait, "device_sync_wait") &
+	       load(stagesurface_create_p010, "device_stagesurface_create_p010") &
+	       load(yuv_compute_available, "device_yuv_compute_available") &
+	       load(texture_convert_yuv, "device_texture_convert_yuv");
 }
 
 static int setup(void **)
@@ -1025,6 +1032,167 @@ static void test_sharedbuf_p010(void **)
 	sharedbuf_case(true);
 }
 
+/* ---- Compute conversion into exportable frames --------------------------------------------------------------- */
+
+// Conversion source: R varies across the frame, G and B are constant. With the identity conversion below Y is R and
+// U/V are G/B, so the planes show whether every sample landed where it belongs.
+static uint8_t storage_r(uint32_t x, uint32_t y)
+{
+	return (uint8_t)(x * 3 + y * 5);
+}
+
+static gs_texture_t *storage_source(gs_device_t *d, uint32_t w, uint32_t h, uint8_t g, uint8_t b)
+{
+	std::vector<uint8_t> px((size_t)w * h * 4);
+	for (uint32_t j = 0; j < h; ++j) {
+		for (uint32_t i = 0; i < w; ++i) {
+			uint8_t *p = &px[((size_t)j * w + i) * 4];
+			p[0] = storage_r(i, j);
+			p[1] = g;
+			p[2] = b;
+			p[3] = 255;
+		}
+	}
+	const uint8_t *data = px.data();
+	gs_texture_t *t = texture_create(d, w, h, GS_RGBA_UNORM, 1, &data, 0);
+	assert_non_null(t);
+	return t;
+}
+
+static struct gs_yuv_conversion identity_conversion()
+{
+	struct gs_yuv_conversion c = {};
+	c.color_vec[0][0] = 1.0f; // Y = R
+	c.color_vec[1][1] = 1.0f; // U = G
+	c.color_vec[2][2] = 1.0f; // V = B
+	c.transfer = GS_YUV_TRANSFER_NONE;
+	c.sdr_white_nits_over_maximum = 1.0f;
+	c.hdr_lw = 1.0f;
+	return c;
+}
+
+// Samples of the NV12/P010 frame `y` belongs to, staged on `d`, that differ from the storage_source pattern by more
+// than 1 LSB (8 bits for NV12, 10 for P010).
+static size_t storage_bad_samples(gs_device_t *d, gs_texture_t *y, uint32_t w, uint32_t h, bool p010, uint8_t g,
+				  uint8_t b)
+{
+	gs_stagesurf_t *s = p010 ? stagesurface_create_p010(d, w, h) : stagesurface_create_nv12(d, w, h);
+	if (!s) {
+		return SIZE_MAX;
+	}
+	stage_texture(d, s, y);
+	uint8_t *data;
+	uint32_t linesize;
+	if (!stagesurface_map(s, &data, &linesize)) {
+		stagesurface_destroy(s);
+		return SIZE_MAX;
+	}
+	auto sample = [&](uint32_t row, uint32_t i) -> int {
+		const uint8_t *r = data + (size_t)row * linesize;
+		return p010 ? (int)(((const uint16_t *)r)[i] >> 6) : (int)r[i];
+	};
+	auto want = [&](uint8_t v) -> int { return p010 ? (int)lroundf(v * 1023.0f / 255.0f) : (int)v; };
+	size_t bad = 0;
+	for (uint32_t j = 0; j < h; ++j) {
+		for (uint32_t i = 0; i < w; ++i) {
+			bad += abs(sample(j, i) - want(storage_r(i, j))) > 1;
+		}
+	}
+	for (uint32_t j = 0; j < h / 2; ++j) {
+		for (uint32_t i = 0; i < w / 2; ++i) {
+			bad += abs(sample(h + j, i * 2) - want(g)) > 1;
+			bad += abs(sample(h + j, i * 2 + 1) - want(b)) > 1;
+		}
+	}
+	stagesurface_unmap(s);
+	stagesurface_destroy(s);
+	return bad;
+}
+
+// One exportable NV12/P010 frame (copy target: a GBM dmabuf where GBM can allocate it, else an opaque fd; render
+// target: an opaque fd). Where the compute conversion can write these frames, create_exportable gives them STORAGE
+// usage and says so in the export description: A allocates and converts into it, B imports it (with that usage),
+// reads it, converts into its import, and A reads that.
+static void storage_exportable_case(gs_device_t *a, gs_device_t *b, gs_timeline_t *tla, gs_timeline_t *tlb,
+				    uint64_t &point, enum gs_shared_layout layout, uint32_t flags)
+{
+	const bool p010 = layout == GS_SHARED_P010;
+	const uint32_t w = 256, h = 128;
+	gs_texture_t *ya = nullptr, *uva = nullptr;
+	assert_true(create_exportable(a, w, h, GS_UNKNOWN, layout, flags, &ya, &uva));
+	struct gs_shared_texture_desc desc;
+	const bool dmabuf = texture_export(a, ya, GS_HANDLE_DMABUF, &desc);
+	if (!dmabuf) {
+		assert_true(texture_export(a, ya, GS_HANDLE_FD, &desc));
+	}
+	const bool storage = yuv_compute_available(a, layout, false);
+	print_message("%s %s: %s, compute conversion %s\n", p010 ? "P010" : "NV12",
+		      (flags & GS_RENDER_TARGET) ? "render target" : "copy target",
+		      dmabuf ? "GBM dmabuf" : "opaque fd", storage ? "into it" : "unavailable");
+	assert_int_equal((desc.flags & GS_SHADER_STORAGE) != 0, storage);
+	gs_texture_t *yb = nullptr, *uvb = nullptr;
+	assert_true(texture_import(b, &desc, &yb, &uvb));
+	close_fds(desc);
+
+	if (storage) {
+		const struct gs_yuv_conversion conv = identity_conversion();
+		// A converts, B reads.
+		gs_texture_t *src = storage_source(a, w, h, 64, 192);
+		assert_true(texture_convert_yuv(a, ya, src, &conv));
+		texture_destroy(src);
+		assert_true(timeline_signal(a, tla, ++point));
+		// A retires its signal before B signals a later value (see test_export_import_second_device).
+		assert_int_equal(timeline_wait_cpu(a, tla, point, 5000000000ull), 0);
+		assert_true(timeline_wait(b, tlb, point));
+		assert_int_equal(storage_bad_samples(b, yb, w, h, p010, 64, 192), 0);
+		// B converts into its import, A reads.
+		if (yuv_compute_available(b, layout, false)) {
+			src = storage_source(b, w, h, 32, 224);
+			assert_true(texture_convert_yuv(b, yb, src, &conv));
+			texture_destroy(src);
+			assert_true(timeline_signal(b, tlb, ++point));
+			assert_int_equal(timeline_wait_cpu(b, tlb, point, 5000000000ull), 0);
+			assert_true(timeline_wait(a, tla, point));
+			assert_int_equal(storage_bad_samples(a, ya, w, h, p010, 32, 224), 0);
+			assert_true(timeline_signal(a, tla, ++point));
+			assert_int_equal(timeline_wait_cpu(a, tla, point, 5000000000ull), 0);
+		}
+	}
+	texture_destroy(yb);
+	texture_destroy(uvb);
+	texture_destroy(ya);
+	texture_destroy(uva);
+}
+
+static void test_storage_exportables(void **)
+{
+	gs_device_t *a = device_or_skip();
+	bank_messages();
+	gs_device_t *b = nullptr;
+	assert_int_equal(create(&b, 0), GS_SUCCESS);
+	within_30s([&] {
+		gs_timeline_t *tla = timeline_create(a, 0);
+		assert_non_null(tla);
+		struct gs_shared_handle th;
+		assert_true(timeline_export(a, tla, GS_HANDLE_FD, &th));
+		gs_timeline_t *tlb = timeline_import(b, &th);
+		assert_non_null(tlb);
+		close_handle(th);
+		uint64_t point = 0;
+		for (enum gs_shared_layout layout : {GS_SHARED_NV12, GS_SHARED_P010}) {
+			for (uint32_t flags : {0u, (uint32_t)GS_RENDER_TARGET}) {
+				storage_exportable_case(a, b, tla, tlb, point, layout, flags);
+			}
+		}
+		timeline_destroy(tlb);
+		timeline_destroy(tla);
+	});
+	destroy(b);
+	bank_messages();
+	destroy(a);
+	expect_no_messages();
+}
+
 /* ---- Cross-process ------------------------------------------------------------------------------------------ */
 
 // What the parent sends with the fds (SCM_RIGHTS, in this order: the BGRA dmabuf's planes, the NV12 opaque fd, the
@@ -1214,6 +1382,7 @@ int main(int argc, char **argv)
 		cmocka_unit_test(test_syncobj_timeline_points),
 		cmocka_unit_test(test_sharedbuf_nv12),
 		cmocka_unit_test(test_sharedbuf_p010),
+		cmocka_unit_test(test_storage_exportables),
 		cmocka_unit_test(test_cross_process),
 	};
 	return cmocka_run_group_tests(tests, setup, teardown);

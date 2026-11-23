@@ -249,7 +249,7 @@ struct gs_texture {
 	VkDeviceSize memory_size = 0;
 	VkExternalMemoryHandleTypeFlags export_types = 0; // exportable as these
 	enum gs_shared_layout layout = GS_SHARED_SINGLE;
-	uint32_t create_flags = 0;            // GS_RENDER_TARGET as created (part of the export description)
+	uint32_t create_flags = 0;            // GS_RENDER_TARGET, GS_SHADER_STORAGE as created (export description)
 	uint32_t shared_handle = 0xFFFFFFFFu; // legacy open_shared/open_nt_shared: the handle it was opened from
 	bool keyed_mutex = false;             // imported D3D11 texture with a keyed mutex
 	void *km_probe = nullptr; // keyed mutex textures: IDXGIKeyedMutex on the D3D11 probe (finite-timeout acquires)
