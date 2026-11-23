@@ -144,6 +144,9 @@ static void test_optional_not_exported(void **)
 			"gs_sharedbuf_destroy",
 			"device_sharedbuf_copy_texture",
 			"device_sharedbuf_export",
+			"device_yuv_compute_available",
+			"device_texture_convert_yuv",
+			"device_sharedbuf_convert",
 			"device_timeline_create",
 			"device_timeline_import",
 			"device_timeline_export",
@@ -196,6 +199,7 @@ static void test_listed_extra_exports_exist_and_are_not_imports(void **)
 			       "obs_vulkan_test_stage_mip",
 			       "obs_vulkan_glslang_refs",
 			       "obs_vulkan_test_read_sharedbuf",
+			       "obs_vulkan_test_convert_yuv_buffer",
 			       "obs_vulkan_test_monitor_info",
 			       "obs_vulkan_test_choose_surface_format"};
 	auto required = imports_for_platform("GRAPHICS_IMPORT(");

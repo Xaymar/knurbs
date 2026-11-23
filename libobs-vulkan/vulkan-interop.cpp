@@ -534,7 +534,7 @@ static void set_external_textures(gs_device *d, gs_texture *tex, gs_texture *tex
 		t->memory_size = size;
 		t->export_types = export_types;
 		t->layout = layout;
-		t->create_flags = flags & GS_RENDER_TARGET;
+		t->create_flags = flags & (GS_RENDER_TARGET | GS_SHADER_STORAGE);
 		t->keyed_mutex = keyed_mutex;
 	}
 	(void)d;
@@ -1400,6 +1400,12 @@ static bool create_exportable(gs_device *d, uint32_t width, uint32_t height, enu
 	*tex = nullptr;
 	if (tex_uv) {
 		*tex_uv = nullptr;
+	}
+	// Two-plane frames the compute conversion can write get STORAGE usage; the flag goes into the export
+	// description, so importers create their image the same way. Decided here, not by the caller.
+	flags &= ~GS_SHADER_STORAGE;
+	if (vk_yuv_storage(d, layout)) {
+		flags |= GS_SHADER_STORAGE;
 	}
 	const VkExternalMemoryHandleTypeFlagBits ht = memory_ext(d) ? export_memory_type(d, layout, flags)
 								    : (VkExternalMemoryHandleTypeFlagBits)0;

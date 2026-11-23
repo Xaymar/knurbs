@@ -188,6 +188,7 @@ static void destroy_texture_objects(gs_device *d, gs_texture *tex)
 		vkDestroyImageView(dev, t.srgb_view, nullptr);
 		vkDestroyImageView(dev, t.rt_view, nullptr);
 		vkDestroyImageView(dev, t.rt_srgb_view, nullptr);
+		vkDestroyImageView(dev, t.storage_view, nullptr);
 		if (!shared) {
 			vmaDestroyImage(vma, t.image, t.alloc); // external textures: alloc is null, only the image goes
 			if (t.memory) {
@@ -366,10 +367,10 @@ static const vk_planar_format &planar_format(bool p010)
 	return p010 ? p010_format : nv12_format;
 }
 
-static VkImageUsageFlags planar_usage(bool rt)
+static VkImageUsageFlags planar_usage(bool rt, bool storage = false)
 {
 	return VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-	       (rt ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0);
+	       (rt ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) | (storage ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
 }
 
 // The multi-planar format can be sampled and copied, both plane formats can be sampled, rendered to and copied,
@@ -418,7 +419,7 @@ static VkImageView create_plane_view(gs_device *d, VkImage image, VkFormat fmt, 
 
 // The plane view gs_texture of `image`; null when a view cannot be created (the image is not freed).
 static gs_texture *create_plane_texture(gs_device *d, VkImage image, VmaAllocation alloc, const vk_planar_format &f,
-					bool uv, uint32_t width, uint32_t height, bool rt)
+					bool uv, uint32_t width, uint32_t height, bool rt, bool storage)
 {
 	auto t = new gs_texture{d};
 	t->image = image;
@@ -429,6 +430,7 @@ static gs_texture *create_plane_texture(gs_device *d, VkImage image, VmaAllocati
 	t->format = uv ? f.gs_uv : f.gs_y;
 	t->aspect = uv ? VK_IMAGE_ASPECT_PLANE_1_BIT : VK_IMAGE_ASPECT_PLANE_0_BIT;
 	t->image_format = f.image;
+	t->storage = storage;
 	const VkFormat fmt = uv ? f.uv : f.y;
 	t->view = create_plane_view(d, image, fmt, t->aspect);
 	bool ok = t->view != VK_NULL_HANDLE;
@@ -459,6 +461,8 @@ static bool create_planar(gs_device *d, gs_texture **tex_y, gs_texture **tex_uv,
 		return false;
 	}
 	const bool rt = (flags & GS_RENDER_TARGET) != 0;
+	// Compute conversion target (vulkan-yuv.cpp) when the device can write the planes as storage images.
+	const bool storage = vk_yuv_storage(d, p010 ? GS_SHARED_P010 : GS_SHARED_NV12);
 
 	const VkFormat view_formats[] = {f.y, f.uv};
 	VkImageFormatListCreateInfo fl = {VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO};
@@ -473,7 +477,7 @@ static bool create_planar(gs_device *d, gs_texture **tex_y, gs_texture **tex_uv,
 	ii.arrayLayers = 1;
 	ii.samples = VK_SAMPLE_COUNT_1_BIT;
 	ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-	ii.usage = planar_usage(rt);
+	ii.usage = planar_usage(rt, storage);
 	ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	VmaAllocationCreateInfo ai = {};
 	ai.usage = VMA_MEMORY_USAGE_AUTO;
@@ -484,8 +488,8 @@ static bool create_planar(gs_device *d, gs_texture **tex_y, gs_texture **tex_uv,
 		blog(LOG_ERROR, "[libobs-vulkan] %s: vmaCreateImage failed", fn);
 		return false;
 	}
-	gs_texture *y = create_plane_texture(d, image, alloc, f, false, width, height, rt);
-	gs_texture *uv = y ? create_plane_texture(d, image, alloc, f, true, width, height, rt) : nullptr;
+	gs_texture *y = create_plane_texture(d, image, alloc, f, false, width, height, rt, storage);
+	gs_texture *uv = y ? create_plane_texture(d, image, alloc, f, true, width, height, rt, storage) : nullptr;
 	if (!uv) {
 		blog(LOG_ERROR, "[libobs-vulkan] %s: plane view creation failed", fn);
 		if (y) {
@@ -560,7 +564,7 @@ bool vk_texture_image_info(gs_device *d, uint32_t width, uint32_t height, enum g
 		out.use_list = true;
 		ii.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
 		ii.format = f.image;
-		ii.usage = planar_usage(rt);
+		ii.usage = planar_usage(rt, (flags & GS_SHADER_STORAGE) != 0);
 	} else {
 		const VkFormat fmt = vk_format(format);
 		if (fmt == VK_FORMAT_UNDEFINED || !width || !height) {
@@ -593,10 +597,11 @@ bool vk_wrap_image(gs_device *d, VkImage image, uint32_t width, uint32_t height,
 		   enum gs_shared_layout layout, uint32_t flags, gs_texture **tex, gs_texture **tex_uv)
 {
 	const bool rt = (flags & GS_RENDER_TARGET) != 0;
+	const bool storage = (flags & GS_SHADER_STORAGE) != 0;
 	if (layout != GS_SHARED_SINGLE) {
 		const vk_planar_format &f = planar_format(layout == GS_SHARED_P010);
-		gs_texture *y = create_plane_texture(d, image, VK_NULL_HANDLE, f, false, width, height, rt);
-		gs_texture *uv = y ? create_plane_texture(d, image, VK_NULL_HANDLE, f, true, width, height, rt)
+		gs_texture *y = create_plane_texture(d, image, VK_NULL_HANDLE, f, false, width, height, rt, storage);
+		gs_texture *uv = y ? create_plane_texture(d, image, VK_NULL_HANDLE, f, true, width, height, rt, storage)
 				   : nullptr;
 		if (!uv) {
 			if (y) {
@@ -1026,9 +1031,10 @@ void vk_texture_release(gs_device *d, gs_texture *t)
 {
 	// The image of a plane pair goes with the Y view (or with whichever view is left alone).
 	const bool owns_image = !t->plane_peer || t->aspect != VK_IMAGE_ASPECT_PLANE_1_BIT;
-	for (VkImageView v : {t->view, t->srgb_view, t->rt_view, t->rt_srgb_view}) {
+	for (VkImageView v : {t->view, t->srgb_view, t->rt_view, t->rt_srgb_view, t->storage_view}) {
 		vkDestroyImageView(d->dev, v, nullptr);
 	}
+	t->storage_view = VK_NULL_HANDLE;
 	if (owns_image) {
 		vmaDestroyImage(d->vma, t->image, t->alloc); // external textures: alloc is null, only the image goes
 		if (t->memory) {

@@ -410,6 +410,78 @@ static void render_convert_texture(struct obs_core_video_mix *video, gs_texture_
 	profile_end(render_convert_texture_name);
 }
 
+/* Vulkan texture encoding (gpu_encode_shared): the NV12/P010 conversion by compute (gs_texture_convert_yuv,
+ * gs_sharedbuf_convert) where the backend offers it; OBS_VULKAN_YUV_CONVERT=fragment keeps the effect's passes.
+ * Encoders that only read the pitch-linear frame buffer (NVENC) get it written straight from the RGB output, and the
+ * NV12/P010 frame is not converted at all when nothing else reads it. False: convert with the effect as usual. */
+static bool gpu_encode_convert_compute(struct obs_core_video_mix *video, gs_texture_t *const *convert_textures,
+				       gs_texture_t *texture, bool raw_active)
+{
+	const struct video_output_info *info = video_output_get_info(video->video);
+	struct gs_yuv_conversion *conv = &video->gpu_encode_conv;
+	enum gs_shared_layout layout;
+
+	video->gpu_encode_src = NULL;
+	if (!video->gpu_encode_shared || !convert_textures[0])
+		return false;
+	if (info->format == VIDEO_FORMAT_NV12) {
+		layout = GS_SHARED_NV12;
+		conv->transfer = GS_YUV_TRANSFER_NONE;
+		conv->chroma_top_left = false;
+	} else if (info->format == VIDEO_FORMAT_P010) {
+		layout = GS_SHARED_P010;
+		const bool hdr = info->colorspace == VIDEO_CS_2100_PQ || info->colorspace == VIDEO_CS_2100_HLG;
+		conv->transfer = info->colorspace == VIDEO_CS_2100_PQ    ? GS_YUV_TRANSFER_PQ
+				 : info->colorspace == VIDEO_CS_2100_HLG ? GS_YUV_TRANSFER_HLG
+									 : GS_YUV_TRANSFER_SRGB;
+		conv->chroma_top_left = hdr;
+	} else {
+		return false;
+	}
+
+	const bool image_compute = gs_yuv_compute_available(layout, false);
+	const bool buffer_compute = gs_yuv_compute_available(layout, true);
+	if (!image_compute && !buffer_compute)
+		return false;
+
+	static const int rows[3] = {4, 0, 8}; /* color_matrix rows as render_convert_texture uses them: Y, U, V */
+	for (int i = 0; i < 3; i++)
+		for (int j = 0; j < 4; j++)
+			conv->color_vec[i][j] = video->color_matrix[rows[i] + j];
+	conv->sdr_white_nits_over_maximum = obs_get_video_sdr_white_level() / 10000.f;
+	conv->hdr_lw = obs->video.hdr_nominal_peak_level;
+
+	pthread_mutex_lock(&video->gpu_encoder_mutex);
+	const long buffer_users = video->gpu_encode_buffer_users;
+	const long image_users = (long)video->gpu_encoders.num - buffer_users;
+	pthread_mutex_unlock(&video->gpu_encoder_mutex);
+
+	const bool buffer_direct = buffer_users > 0 && buffer_compute;
+	const bool need_image = raw_active || image_users > 0 || (buffer_users > 0 && !buffer_direct);
+	bool image_by_compute = false;
+	if (need_image) {
+		image_by_compute = image_compute && gs_texture_convert_yuv(convert_textures[0], texture, conv);
+		if (!image_by_compute)
+			render_convert_texture(video, convert_textures, texture);
+	}
+	video->gpu_encode_src = buffer_direct ? texture : NULL;
+	video->texture_converted = true;
+
+	const int path = 1 | (image_by_compute ? 2 : 0) | (!need_image ? 4 : 0) | (buffer_direct ? 8 : 0);
+	if (path != video->gpu_encode_yuv_path) {
+		video->gpu_encode_yuv_path = path;
+		blog(LOG_INFO, "GPU encode: %s conversion of the encoder frame by %s, frame buffer %s",
+		     layout == GS_SHARED_P010 ? "P010" : "NV12",
+		     !need_image        ? "nobody (no reader)"
+		     : image_by_compute ? "compute"
+					: "fragment passes",
+		     buffer_users <= 0 ? "unused"
+		     : buffer_direct   ? "written by compute"
+				       : "copied from the frame");
+	}
+	return true;
+}
+
 static const char *stage_output_texture_name = "stage_output_texture";
 static inline void stage_output_texture(struct obs_core_video_mix *video, int cur_texture,
 					gs_texture_t *const *const convert_textures, gs_texture_t *output_texture,
@@ -569,11 +641,14 @@ static inline void render_video(struct obs_core_video_mix *video, bool raw_activ
 		}
 
 		if (video->gpu_conversion) {
-			render_convert_texture(video, convert_textures, output_texture);
+			if (!gpu_active ||
+			    !gpu_encode_convert_compute(video, convert_textures, output_texture, raw_active))
+				render_convert_texture(video, convert_textures, output_texture);
 		}
 
 		if (gpu_active) {
 			output_gpu_encoders(video, raw_active);
+			video->gpu_encode_src = NULL;
 		}
 
 		if (raw_active) {

@@ -75,17 +75,20 @@ uint8_t *vk_arena_alloc(gs_device *d, VkDeviceSize size, VkDeviceSize align, vk_
 	}
 }
 
-static VkDescriptorSet alloc_set(gs_device *d, VkDescriptorSetLayout layout)
+VkDescriptorSet vk_alloc_set(gs_device *d, VkDescriptorSetLayout layout)
 {
 	vk_frame &f = d->frames.frames[d->frames.index];
 	for (;; ++f.desc_pool) {
 		const bool fresh = f.desc_pool == f.desc_pools.size();
 		if (fresh) {
+			// Storage images and buffers: the compute YUV conversion (vulkan-yuv.cpp), a few sets per frame.
 			const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 512},
-							      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024}};
+							      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
+							      {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 32},
+							      {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16}};
 			VkDescriptorPoolCreateInfo pi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 			pi.maxSets = 512;
-			pi.poolSizeCount = 2;
+			pi.poolSizeCount = 4;
 			pi.pPoolSizes = sizes;
 			VkDescriptorPool pool;
 			if (vkCreateDescriptorPool(d->dev, &pi, nullptr, &pool) != VK_SUCCESS) {
@@ -566,7 +569,7 @@ static bool write_set(gs_device *d, gs_shader *s, VkDescriptorSet &set, vk_barri
 		return true;
 	}
 
-	set = alloc_set(d, s->set_layout);
+	set = vk_alloc_set(d, s->set_layout);
 	if (!set) {
 		blog(LOG_ERROR, "[libobs-vulkan] device_draw: descriptor set allocation failed");
 		return false;

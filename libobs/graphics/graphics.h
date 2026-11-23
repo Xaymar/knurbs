@@ -468,6 +468,9 @@ EXPORT enum gs_color_format gs_texrender_get_format(const gs_texrender_t *texren
 				 *    creating a vertex/index buffer */
 #define GS_SHARED_TEX (1 << 5)
 #define GS_SHARED_KM_TEX (1 << 6)
+/* Vulkan NV12/P010 textures: also writable by compute (STORAGE usage). The backend sets it on exportable encoder
+ * frames it can convert into with gs_texture_convert_yuv; it is part of the exported flags an importer reproduces. */
+#define GS_SHADER_STORAGE (1 << 7)
 
 /* ---------------- */
 /* global functions */
@@ -893,6 +896,34 @@ EXPORT void gs_sharedbuf_destroy(gs_sharedbuf_t *buf);
 /* Records a GPU copy of both planes of the NV12/P010 texture `tex_y` belongs to (same size and layout). */
 EXPORT bool gs_sharedbuf_copy_texture(gs_sharedbuf_t *buf, gs_texture_t *tex_y);
 EXPORT bool gs_sharedbuf_export(gs_sharedbuf_t *buf, enum gs_handle_type type, struct gs_shared_texture_desc *desc);
+
+/* RGB -> two-plane YUV in one compute dispatch (Vulkan) with the math of format_conversion.effect's NV12, P010 and
+ * P216 techniques: Y = dot(color_vec[0].xyz, rgb) + color_vec[0].w, U and V likewise from color_vec[1] and [2].
+ * Chroma is left-sited ([1 2 1] / 4 across); 4:2:0 averages two rows, or with chroma_top_left (P010 PQ/HLG) the
+ * three rows around the upper one ([1 2 1] / 4). 10-bit layouts are quantised as P010 (10 bits, high bits of 16). */
+enum gs_yuv_transfer {
+	GS_YUV_TRANSFER_NONE = 0, /* the source is non-linear already (NV12_*) */
+	GS_YUV_TRANSFER_SRGB = 1, /* linear -> sRGB curve (P010_SRGB_*) */
+	GS_YUV_TRANSFER_PQ = 2,   /* scaled by sdr_white_nits_over_maximum, Rec. 709 -> 2020, ST 2084 */
+	GS_YUV_TRANSFER_HLG = 3,  /* scaled by sdr_white_nits_over_maximum, Rec. 709 -> 2020, HLG for hdr_lw */
+};
+
+struct gs_yuv_conversion {
+	float color_vec[3][4];
+	enum gs_yuv_transfer transfer;
+	float sdr_white_nits_over_maximum;
+	float hdr_lw;
+	bool chroma_top_left;
+};
+
+/* Whether gs_texture_convert_yuv (buffer = false) or gs_sharedbuf_convert (true) can write `layout` here. False on
+ * backends without it and when the fragment path was chosen (Vulkan: OBS_VULKAN_YUV_CONVERT=fragment). */
+EXPORT bool gs_yuv_compute_available(enum gs_shared_layout layout, bool buffer);
+/* Converts `src` (RGBA, sampled as gs_effect_set_texture does) into both planes of the NV12/P010 texture `tex_y`
+ * belongs to; that texture must have been created while gs_yuv_compute_available(layout, false) said yes. */
+EXPORT bool gs_texture_convert_yuv(gs_texture_t *tex_y, gs_texture_t *src, const struct gs_yuv_conversion *conv);
+/* The same straight into a pitch-linear frame buffer (no NV12/P010 texture and no copy in between). */
+EXPORT bool gs_sharedbuf_convert(gs_sharedbuf_t *buf, gs_texture_t *src, const struct gs_yuv_conversion *conv);
 
 /* Timeline semaphores. GPU signals and waits are ordered with this device's submissions; values only increase. */
 typedef struct gs_timeline gs_timeline_t;

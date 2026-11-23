@@ -736,6 +736,37 @@ EXPORT bool device_sharedbuf_copy_texture(gs_device_t *device, gs_sharedbuf_t *b
 	return false;
 }
 
+EXPORT bool device_yuv_compute_available(gs_device_t *device, enum gs_shared_layout layout, bool buffer)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(layout);
+	UNUSED_PARAMETER(buffer);
+	COUNT(device_yuv_compute_available);
+	return false;
+}
+
+EXPORT bool device_texture_convert_yuv(gs_device_t *device, gs_texture_t *tex_y, gs_texture_t *src,
+				       const struct gs_yuv_conversion *conv)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(tex_y);
+	UNUSED_PARAMETER(src);
+	UNUSED_PARAMETER(conv);
+	COUNT(device_texture_convert_yuv);
+	return false;
+}
+
+EXPORT bool device_sharedbuf_convert(gs_device_t *device, gs_sharedbuf_t *buf, gs_texture_t *src,
+				     const struct gs_yuv_conversion *conv)
+{
+	UNUSED_PARAMETER(device);
+	UNUSED_PARAMETER(buf);
+	UNUSED_PARAMETER(src);
+	UNUSED_PARAMETER(conv);
+	COUNT(device_sharedbuf_convert);
+	return false;
+}
+
 EXPORT bool device_sharedbuf_export(gs_device_t *device, gs_sharedbuf_t *buf, enum gs_handle_type type,
 				    struct gs_shared_texture_desc *desc)
 {

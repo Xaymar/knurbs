@@ -282,6 +282,9 @@ static int create_device(gs_device *d, uint32_t adapter)
 	VkPhysicalDeviceFeatures core = {};
 	core.samplerAnisotropy = feats.features.samplerAnisotropy;
 	d->anisotropy = feats.features.samplerAnisotropy;
+	// r8/rg8/r16/rg16 storage images: the compute YUV conversion writes NV12/P010 planes through them.
+	core.shaderStorageImageExtendedFormats = feats.features.shaderStorageImageExtendedFormats;
+	d->storage_ext_formats = feats.features.shaderStorageImageExtendedFormats;
 	en12.samplerMirrorClampToEdge = d->mirror_clamp = f12.samplerMirrorClampToEdge;
 	en12.hostQueryReset = f12.hostQueryReset; // timers reset their queries from the host when they can
 	d->limits = props.properties.limits;
@@ -461,6 +464,7 @@ static int create_device(gs_device *d, uint32_t adapter)
 		return GS_ERROR_FAIL;
 	vk_interop_init(d, interop_exts);
 	vk_timers_init(d, fams[gfx].queueFamilyProperties.timestampValidBits, f12.hostQueryReset);
+	vk_yuv_init(d);
 
 	gs_vulkan_device &nat = d->native;
 	nat = gs_vulkan_device{};
@@ -527,6 +531,7 @@ void vk_device_close(gs_device *d)
 	d->frames.destroy(); // runs deferred work, which returns acquire semaphores to spare_sems
 	vk_timers_free(d);
 	vk_interop_free(d);
+	vk_yuv_free(d);
 	vk_pipelines_free(d);
 	if (d->acquire_wait)
 		d->spare_sems.push_back(d->acquire_wait);

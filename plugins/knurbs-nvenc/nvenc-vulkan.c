@@ -4,7 +4,8 @@
 /*
  * NVENC on the Vulkan renderer (docs/graphics-interop.md, "Texture encoders").
  *
- * libobs copies every frame into a pitch-linear frame buffer (the one copy), exported as an NT handle. It is
+ * libobs writes every frame into a pitch-linear frame buffer, exported as an NT handle: one compute dispatch from the
+ * RGB output (gs_sharedbuf_convert), or a copy of the NV12/P010 image where compute is unavailable. It is
  * imported into CUDA as external memory and registered with NVENC as CUDADEVICEPTR: on Windows an NV12 image
  * imported as a CUDA array reads back garbage (spike 3), a buffer does not. libobs signals its ready timeline once a
  * frame is written; CUDA waits for it. Once NVENC has finished with a frame (its bitstream is locked, in submission
