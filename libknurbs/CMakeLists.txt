@@ -35,6 +35,8 @@ target_sources(
     source/object.cpp
     source/platform.cpp
     source/properties.cpp
+    source/registry-impl.hpp
+    source/registry.cpp
     source/thread.cpp
     source/version.cpp
 )

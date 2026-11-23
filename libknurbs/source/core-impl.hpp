@@ -5,6 +5,7 @@
 #include <mutex>
 
 #include "knurbs/core.hpp"
+#include "registry-impl.hpp"
 
 namespace knurbs::detail {
 
@@ -18,6 +19,7 @@ class core_impl final : public core {
 	std::mutex mutex_;
 	std::condition_variable stopped_cv_;
 	state state_ = state::running;
+	mutable registry_impl registry_{*this}; // last: destroyed first
 
 public:
 	core_impl(ref<log::logger> logger, ref<thread::task_queue> destruction_queue) noexcept;
@@ -25,6 +27,8 @@ public:
 
 	const ref<log::logger> &logger() const noexcept { return logger_; }
 	const ref<thread::task_queue> &destruction_queue() const noexcept { return destruction_queue_; }
+
+	registry_impl &registry() const noexcept { return registry_; }
 
 	void shutdown() noexcept;
 	bool is_shut_down() const noexcept { return shut_down_.load(std::memory_order_acquire); }

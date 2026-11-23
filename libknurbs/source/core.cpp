@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "knurbs/error.hpp"
+#include "knurbs/registry.hpp"
 #include "knurbs/version.hpp"
 
 namespace knurbs {
@@ -40,6 +41,10 @@ void core_impl::shutdown() noexcept
 void core_impl::stop_threads() noexcept
 {
 	// Threads added later stop here, before the destruction queue, so their last deletes still reach it.
+
+	// Types owned by plugins are released while the queue still accepts deferred deletes. Task 13 unloads modules
+	// after this.
+	registry_.clear();
 
 	// The destruction queue goes last. stop() refuses new posts; from then on deferred objects delete inline.
 	destruction_queue_->stop();
@@ -86,6 +91,11 @@ ref<log::logger> core::logger() const
 ref<thread::task_queue> core::destruction_queue() const
 {
 	return static_cast<const detail::core_impl *>(this)->destruction_queue();
+}
+
+knurbs::registry &core::registry() const
+{
+	return static_cast<const detail::core_impl *>(this)->registry();
 }
 
 void core::shutdown() noexcept

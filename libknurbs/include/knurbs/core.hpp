@@ -10,6 +10,8 @@
 
 namespace knurbs {
 
+class registry;
+
 namespace detail {
 class core_impl;
 }
@@ -18,7 +20,8 @@ class core_impl;
 // no process-wide state, so several cores can exist side by side without interfering. Thread-safe.
 //
 // Shutdown, run by shutdown() or by the core's last release, stops the core's threads in a fixed order, the
-// destruction queue last. After it begins, check_alive() throws error::core_gone and the destruction queue refuses
+// destruction queue last. Between the two it clears the registry (drops every type and alias), so type objects that
+// plugins own are released while the core is still up and before any module is unloaded. After it begins, check_alive() throws error::core_gone and the destruction queue refuses
 // new tasks. What it guarantees about deferred deletes (thread::deferred_object on the destruction queue):
 // - Every delete posted to the destruction queue before shutdown began has finished when shutdown returns. This
 //   also holds when shutdown runs on the destruction queue's own thread (for example because a deferred delete
@@ -51,6 +54,10 @@ public:
 	// The queue that deferred objects of this core are deleted on. Still returned after shutdown, but stopped:
 	// post() then throws error::core_gone.
 	ref<thread::task_queue> destruction_queue() const;
+
+	// The type registry. Its members throw error::core_gone once shutdown has begun; the reference itself stays
+	// valid for as long as the core is held.
+	knurbs::registry &registry() const;
 
 	// Stops the core; see above. Idempotent. The core's last release calls it.
 	void shutdown() noexcept;
