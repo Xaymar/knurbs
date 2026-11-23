@@ -192,9 +192,6 @@ jobs:
           commit_hash="${GITHUB_SHA:0:9}"
           macos_universal_artifact_name="obs-studio-macos-universal-${commit_hash}"
           macos_universal_dsym_artifact_name="obs-studio-macos-universal-${commit_hash}-dSYMs"
-          ubuntu_2604_x86_64_artifact_name="obs-studio-ubuntu-26.04-x86_64-${commit_hash}"
-          ubuntu_2604_x86_64_debug_name="obs-studio-ubuntu-26.04-x86_64-${commit_hash}-dbgsym"
-          ubuntu_2604_sources_name="obs-studio-ubuntu-26.04-sources-${commit_hash}"
           windows_x64_artifact_name="obs-studio-windows-x64-${{ steps.check.outputs.version }}-signed"
           windows_x64_installer_name="obs-studio-windows-x64-${{ steps.check.outputs.version }}-installer"
           windows_x64_debug_name="obs-studio-windows-x64-${{ steps.check.outputs.version }}-pdbs"
@@ -204,12 +201,6 @@ jobs:
             "${root_dir}"/OBS-Studio-${{ steps.check.outputs.version }}-macOS-Universal.dmg
           mv -v "${macos_universal_dsym_artifact_name}/"obs-studio-*-macos-universal-dSYMs.tar.xz \
             "${root_dir}"/OBS-Studio-${{ steps.check.outputs.version }}-macOS-Universal-dSYMs.tar.xz
-          mv -v "${ubuntu_2604_x86_64_artifact_name}/"obs-studio-*-x86_64-ubuntu-gnu.deb \
-            "${root_dir}"/OBS-Studio-${{ steps.check.outputs.version }}-Ubuntu-26.04-x86_64.deb
-          mv -v "${ubuntu_2604_x86_64_debug_name}/"obs-studio-*-x86_64-ubuntu-gnu-dbgsym.ddeb \
-            "${root_dir}"/OBS-Studio-${{ steps.check.outputs.version }}-Ubuntu-26.04-x86_64-dbsym.ddeb
-          mv -v "${ubuntu_2604_sources_name}/"obs-studio-*-sources.tar.gz \
-            "${root_dir}"/OBS-Studio-${{ steps.check.outputs.version }}-Sources.tar.gz
           mv -v "${windows_x64_artifact_name}/"OBS-Studio-*.zip \
             "${root_dir}"/OBS-Studio-${{ steps.check.outputs.version }}-Windows-x64.zip
           mv -v "${windows_x64_installer_name}/"OBS-Studio-*.exe \
@@ -243,9 +234,6 @@ jobs:
           files: |
             ${{ github.workspace }}/OBS-Studio-${{ steps.check.outputs.version }}-macOS-*.dmg
             ${{ github.workspace }}/OBS-Studio-${{ steps.check.outputs.version }}-macOS-*-dSYMs.tar.xz
-            ${{ github.workspace }}/OBS-Studio-${{ steps.check.outputs.version }}-Ubuntu-*.deb
-            ${{ github.workspace }}/OBS-Studio-${{ steps.check.outputs.version }}-Ubuntu-*.ddeb
-            ${{ github.workspace }}/OBS-Studio-${{ steps.check.outputs.version }}-Sources.tar.gz
             ${{ github.workspace }}/OBS-Studio-${{ steps.check.outputs.version }}-Windows-x64.zip
             ${{ github.workspace }}/OBS-Studio-${{ steps.check.outputs.version }}-Windows-x64-Installer.exe
             ${{ github.workspace }}/OBS-Studio-${{ steps.check.outputs.version }}-Windows-x64-PDBs.zip
