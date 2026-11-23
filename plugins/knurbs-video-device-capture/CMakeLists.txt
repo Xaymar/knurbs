@@ -5,7 +5,7 @@ add_library(OBS::knurbs-video-device-capture ALIAS knurbs-video-device-capture)
 
 target_sources(
   knurbs-video-device-capture
-  PRIVATE backends.c backends/dshow/dshow-formats.h migrate.c migrate.h plugin-main.c video-device.c video-device.h
+  PRIVATE backends.c plugin-main.c video-device.c video-device.h
 )
 
 target_include_directories(knurbs-video-device-capture PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

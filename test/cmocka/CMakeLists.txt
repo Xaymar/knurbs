@@ -89,11 +89,10 @@ target_link_libraries(test_source_alias PRIVATE OBS::libobs cmocka::cmocka)
 add_test(NAME test_source_alias COMMAND test_source_alias)
 set_tests_properties(test_source_alias PROPERTIES ENVIRONMENT_MODIFICATION "${_obs_runtime_env}")
 
-# Video Device Capture: migrations and backend selection, with fake backends
+# Video Device Capture: backend selection and show/hide, with fake backends
 add_executable(
   test_video_device
   test_video_device.c
-  ${CMAKE_SOURCE_DIR}/plugins/knurbs-video-device-capture/migrate.c
   ${CMAKE_SOURCE_DIR}/plugins/knurbs-video-device-capture/video-device.c
 )
 target_include_directories(
