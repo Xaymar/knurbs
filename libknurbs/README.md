@@ -14,13 +14,13 @@ The C++23 core library of Knurbs. It is built beside libobs and ships as a share
 TODO (AppleClang floor and macOS deployment target): the macOS CI job builds the `libknurbs` target (compile only,
 no tests) since the final review; its first green run decides both rows. What is known:
 
-- The deployment target is OBS's, `CMAKE_OSX_DEPLOYMENT_TARGET` 13.0 (`CMakePresets.json`, passed to Xcode by
-  `cmake/macos/xcode.cmake`). libknurbs does not set its own.
+- libknurbs raises the macOS deployment target to 13.3 for itself and its tests (`KNURBS_MACOS_MINIMUM` in
+  `CMakeLists.txt`); the rest of OBS stays at 13.0. libc++ marks the floating-point `std::to_chars` that
+  `std::format` uses as introduced in macOS 13.3 (macOS CI on 023367412).
 - Apple's libc++ in Xcode 26.5 has no `std::move_only_function` (macOS CI on 22b9fe316), so libknurbs uses its own
   `knurbs::move_only_function` (`knurbs/function.hpp`) on every platform. The same CI build reported no error for
   `std::jthread`, `std::format` or the other features below.
-- Still to confirm by a green macOS build: libc++'s availability markup for `std::format` (floating-point
-  `std::to_chars` needs macOS 13.3, which may force the deployment target above 13.0).
+- Still to confirm by a green macOS build: no other feature needs a higher target than 13.3.
 
 The C++ API passes standard library types (`std::string`, `std::vector`, `std::filesystem::path`,
 `knurbs::move_only_function`), so a C++ plugin must be built with the same toolchain and, on Windows, the same
@@ -35,7 +35,7 @@ Library features newer than C++17, with their state in libc++ (macOS). The libc+
 | Feature | Header | Used in | libc++ |
 | ------- | ------ | ------- | ------ |
 | `std::move_only_function` | `<functional>` | Not used: missing from libc++. `knurbs::move_only_function` (`knurbs/function.hpp`) replaces it everywhere: log sinks, queued tasks, button and modified callbacks | Missing (Xcode 26.5, LLVM 18) |
-| `std::format`, `std::format_string` | `<format>` | `knurbs/log.hpp` (logger formatting helpers), error messages in `source/` | Present (LLVM 17 and later); availability on macOS < 13.3 to confirm |
+| `std::format`, `std::format_string` | `<format>` | `knurbs/log.hpp` (logger formatting helpers), error messages in `source/` | Present (LLVM 17 and later); needs macOS 13.3 (floating-point `std::to_chars`) |
 | `std::jthread` (C++20) | `<thread>` | `source/thread.cpp` (task queue thread), `source/module-loader.cpp` (entry-point threads); not in public headers | Present in Xcode 26.5; experimental (`-fexperimental-library`) in LLVM 18 |
 | `std::barrier` (C++20) | `<barrier>` | `tests/` only | Present (LLVM 11 and later; macOS 11) |
 

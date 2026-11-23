@@ -18,6 +18,15 @@ include(GNUInstallDirs)
 
 find_package(nlohmann_json 3.11 REQUIRED)
 
+# Parts of libc++ live in macOS itself, so C++23 library features carry a minimum
+# OS version. std::format needs the floating-point std::to_chars from macOS 13.3.
+# Raise the deployment target for libknurbs and its tests only, never lower it.
+set(KNURBS_MACOS_MINIMUM 13.3)
+if(APPLE AND (NOT CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS KNURBS_MACOS_MINIMUM))
+  set(CMAKE_OSX_DEPLOYMENT_TARGET ${KNURBS_MACOS_MINIMUM})
+  set(CMAKE_XCODE_ATTRIBUTE_MACOSX_DEPLOYMENT_TARGET ${KNURBS_MACOS_MINIMUM})
+endif()
+
 add_library(libknurbs SHARED)
 add_library(knurbs::knurbs ALIAS libknurbs)
 
