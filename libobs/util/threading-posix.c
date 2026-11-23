@@ -153,7 +153,8 @@ int os_event_signal(os_event_t *event)
 	int code = 0;
 
 	pthread_mutex_lock(&event->mutex);
-	code = pthread_cond_signal(&event->cond);
+	/* a manual event releases every waiter, as SetEvent() does on Windows */
+	code = event->manual ? pthread_cond_broadcast(&event->cond) : pthread_cond_signal(&event->cond);
 	event->signalled = true;
 	pthread_mutex_unlock(&event->mutex);
 
