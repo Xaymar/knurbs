@@ -78,8 +78,10 @@ These are not built by this project, but the core must not make them hard:
 - Compatibility between compilers. Each platform has one toolchain family:
   MSVC ABI on Windows (MSVC, and clang-cl for coverage), GCC or Clang with
   libstdc++ on Linux, and AppleClang with libc++ on macOS.
-- Changing libobs. It stays as it is until it is retired, apart from the
-  upstream fixes that keep being merged into it.
+- Changing libobs. Only libknurbs ships (Xaymar, 2026-11-23). Knurbs is a
+  hard fork, and libobs stays in the tree only as a reference that upstream
+  fixes get merged into, so they can be ported. It is dropped entirely once
+  libknurbs reaches feature parity.
 - Building the planned features listed above.
 - Scripting. The first release has none; it returns later as plugins.
 
@@ -117,9 +119,9 @@ These are not built by this project, but the core must not make them hard:
   Qt 6.0 plugins keep loading in Qt 6.x, and breaks only at a major version.
   Plugins are rebuilt only for a new major. The C API stays stable across
   majors too. See "Binary compatibility rules" below.
-- **Upstream OBS fixes keep being merged into libobs.** libknurbs must not live
-  inside `libobs/`, so those merges never collide. Fixes worth having in
-  libknurbs are ported by hand.
+- **Upstream OBS fixes keep being merged into libobs** while it exists as the
+  reference. libknurbs must not live inside `libobs/`, so those merges never
+  collide. Fixes worth having in libknurbs are ported by hand.
 - **The existing test suite** (84 cmocka files in `test/cmocka/`) tests libobs
   through its public API. It guards libobs, not libknurbs. Each libknurbs layer
   needs its own ported tests before anything moves onto it. CI doesn't run the
@@ -483,11 +485,13 @@ Each layer has its own tests and is usable before the next one starts.
 6. Bundled plugins are ported one by one (capture, encoders such as
    knurbs-nvenc and knurbs-hw-encoders, outputs, text). Each one moves to new
    IDs with aliases from the old ones.
-7. libobs, the old frontend and the D3D11/OpenGL/Metal backends are dropped
-   from the default build. Legacy OBS plugins run through datapath.
+7. Once libknurbs reaches feature parity, libobs, the old frontend and the
+   D3D11/OpenGL/Metal backends are deleted from the tree. Legacy OBS plugins
+   run through datapath.
 
-Until step 7, upstream fixes keep landing in libobs. Each one gets checked for
-whether libknurbs needs the same fix, and ported by hand if it does. The
+libknurbs is the only core that ships. Until step 7, libobs is a reference
+only: upstream fixes keep being merged into it, each one gets checked for
+whether libknurbs needs the same fix, and it's ported by hand if it does. The
 builder keeps a list of what was checked.
 
 ## Decided by Xaymar
@@ -523,6 +527,8 @@ builder keeps a list of what was checked.
 - Exceptions live in `knurbs::error`; namespaces are used like directories
   (2026-11-23).
 - `source/`, not `src/` (2026-11-23).
+- Only libknurbs ships. libobs is a reference for upstream fixes, deleted at
+  feature parity (2026-11-23).
 - The design is good for now; it can still change before the 1.0 ABI
   (2026-11-23).
 - Windows first (project direction).
@@ -558,8 +564,10 @@ builder keeps a list of what was checked.
 
 ## Risks
 
-- **Two cores side by side** for a long time doubles the maintenance work, and
-  upstream fixes can be missed. The checked-fix list is the mitigation.
+- **Missed upstream fixes.** libobs is only a reference and is never shipped,
+  so there's no double maintenance, but a fix merged into libobs can be
+  overlooked for libknurbs. The checked-fix list is the mitigation, and the
+  risk ends when libobs is deleted at feature parity.
 - **AppleClang lagging behind on C++23 library features.** This is mitigated by
   the feature floor in `libknurbs/README.md`. There is also no Mac among the
   test machines.
