@@ -322,6 +322,34 @@ if(ENABLE_VULKAN)
     add_dependencies(test_vulkan_interop libobs-vulkan)
     target_link_libraries(test_vulkan_interop PRIVATE OBS::libobs cmocka::cmocka d3d11 dxgi)
     add_test(test_vulkan_interop test_vulkan_interop)
+
+    # The D3D11 capture bridge (shared/d3d11-vulkan-bridge) across simulated device losses: every keyed-mutex slot is
+    # writable again after the rebuild. Needs a device (skips without one).
+    if(TARGET OBS::d3d11-vulkan-bridge)
+      add_executable(test_vulkan_d3d11_bridge test_vulkan_d3d11_bridge.cpp)
+      target_include_directories(
+        test_vulkan_d3d11_bridge
+        PRIVATE ${CMOCKA_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/libobs-vulkan
+      )
+      target_compile_definitions(
+        test_vulkan_d3d11_bridge
+        PRIVATE OBS_VULKAN_MODULE="$<TARGET_FILE_DIR:libobs-vulkan>/libobs-vulkan"
+      )
+      target_compile_features(test_vulkan_d3d11_bridge PRIVATE cxx_std_17)
+      add_dependencies(test_vulkan_d3d11_bridge libobs-vulkan)
+      target_link_libraries(
+        test_vulkan_d3d11_bridge
+        PRIVATE OBS::libobs OBS::vma Vulkan::Headers OBS::d3d11-vulkan-bridge cmocka::cmocka
+      )
+      add_test(NAME test_vulkan_d3d11_bridge COMMAND test_vulkan_d3d11_bridge)
+      set_tests_properties(
+        test_vulkan_d3d11_bridge
+        PROPERTIES
+          ENVIRONMENT "OBS_VULKAN_VALIDATION=1;VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
+          ENVIRONMENT_MODIFICATION "${_obs_runtime_env}"
+          SKIP_REGULAR_EXPRESSION "SKIPPED"
+      )
+    endif()
   endif()
 
   if(OS_LINUX)

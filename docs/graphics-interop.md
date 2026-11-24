@@ -220,8 +220,10 @@ renderer's own D3D11 device, so on D3D11 display capture still uses it, unchange
   from the output's `DXGI_MODE_ROTATION`, as on D3D11.
 * On a Vulkan device loss the D3D11 device and the duplication stay, and only the imports are replaced: the same NT
   handles are imported again (`slots::reimport`), and the D3D11 textures still hold the newest frame, so a static
-  desktop (which sends no new frames) is drawn again at once. The slot Vulkan held when the device was lost can stay
-  held: a keyed mutex acquired by a lost device is never released (still held after seconds, NVIDIA 621.24). Then
+  desktop (which sends no new frames) is drawn again at once. A slot Vulkan held when the device was lost can stay
+  held: a keyed mutex acquired by a lost device is never released (still held after seconds, NVIDIA 621.24). Every
+  slot is checked, not only the drawn one: a loss between the release of the drawn slot and the acquire of a newer
+  one leaves the old slot held although it is no longer the drawn one (`test_vulkan_d3d11_bridge`). Then
   the slots are created again and the duplication is restarted on the same D3D11 device, whose first frame is the
   whole desktop. On the other-adapter path the last staged frame is uploaded again. If the renderer comes back on
   another adapter, the duplication is created again.
