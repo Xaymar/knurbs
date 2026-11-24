@@ -85,18 +85,19 @@ bool slots::reimport()
 		gs_texture_destroy(sl.tex); /* a placeholder: no keyed mutex to release */
 		sl.tex = nullptr;
 	}
-	/* The lost device held `current`. If it released it, the mutex is free; if not, it never is (it stays held
-	 * by the lost device, tested for seconds), so there is no point waiting. */
-	if (current >= 0) {
-		const HRESULT hr = slot[current].km->AcquireSync(0, 0);
+	/* A mutex the lost device held and did not release is never free again (tested for seconds), so there is no
+	 * point waiting. Every slot is checked, not only `current`: draw_texture forgets `current` once it has submitted
+	 * its release, so a loss between that release and the acquire of the newer slot leaves the old slot held with
+	 * `current` -1. D3D11 holds none here (write releases before it returns). */
+	current = -1;
+	for (int i = 0; i < count; ++i) {
+		const HRESULT hr = slot[i].km->AcquireSync(0, 0);
 		if (hr != S_OK) {
-			blog(LOG_WARNING, "%s Vulkan: keyed mutex still held by the lost device (0x%08lX)", log_prefix,
-			     (unsigned long)hr);
-			current = -1;
+			blog(LOG_WARNING, "%s Vulkan: keyed mutex of slot %d still held by the lost device (0x%08lX)",
+			     log_prefix, i, (unsigned long)hr);
 			return false;
 		}
-		slot[current].km->ReleaseSync(0);
-		current = -1;
+		slot[i].km->ReleaseSync(0);
 	}
 	for (int i = 0; i < count; ++i) {
 		slot_t &sl = slot[i];
